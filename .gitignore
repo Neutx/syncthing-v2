@@ -1,0 +1,26 @@
+# Build output
+/dist/
+*.exe
+*.exe.old
+*.syso
+*.test
+*.prof
+/coverage.out
+
+# OS and editor litter
+.DS_Store
+Thumbs.db
+desktop.ini
+*.stackdump
+*.swp
+.idea/
+.vscode/
+
+# Syncthing temporary and conflict files (the checkout may live in a synced folder)
+.syncthing.*.tmp
+~syncthing~*.tmp
+*.sync-conflict-*
+.stfolder/
+.stversions/
+
+# Note: .git/info/privacy-denylist is inside .git and therefore never tracked.

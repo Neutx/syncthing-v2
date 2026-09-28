@@ -1,0 +1,611 @@
+# Release pipeline (spec §9.2), triggered by a version tag such as v1.0.0.
+# It produces a DRAFT GitHub release; a maintainer publishes it after the
+# checklist in docs/releasing.md.
+#
+# Optional signing, skipped unless the secrets exist:
+#   SIGNPATH_API_TOKEN (secret) with the variables SIGNPATH_ORGANIZATION_ID,
+#     SIGNPATH_PROJECT_SLUG and SIGNPATH_SIGNING_POLICY_SLUG: Authenticode through SignPath.
+#   APPLE_DEVELOPER_ID_P12 (base64 of the .p12), APPLE_ID, APPLE_TEAM_ID and
+#     APPLE_APP_PASSWORD, plus APPLE_DEVELOPER_ID_P12_PASSWORD when the .p12 has
+#     a password: Developer ID codesign and notarization.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+env:
+  MODULE: github.com/Neutx/syncthing-v2
+  GO_WINRES: github.com/tc-hib/go-winres@v0.3.3
+  NFPM: github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    with:
+      checks-only: true
+    secrets:
+      PRIVACY_DENYLIST: ${{ secrets.PRIVACY_DENYLIST }}
+    permissions:
+      contents: read
+
+  verify:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      epoch: ${{ steps.version.outputs.epoch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Tag, CHANGELOG section, commit time
+        id: version
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if ! printf '%s\n' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+            echo "::error::tag '$tag' is not a semantic version (vX.Y.Z or vX.Y.Z-pre)"
+            exit 1
+          fi
+          version=${tag#v}
+          mkdir -p meta
+          # The section runs to the next "## [" heading; the link definitions at
+          # the end of a Keep a Changelog file ("[1.0.0]: https://...") are skipped.
+          awk -v head="## [$version]" '
+            index($0, head) == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on && /^\[[^]]*\]:[[:space:]]/ { next }
+            on { print }
+          ' CHANGELOG.md > meta/notes.md
+          if ! grep -q '[^[:space:]]' meta/notes.md; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md has no '## [$version]' section with release notes"
+            exit 1
+          fi
+          case $version in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+          {
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+            echo "epoch=$(git log -1 --format=%ct)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Bake the version into the install scripts
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # installer-test runs these exact files; publish attaches them.
+          mkdir -p meta/scripts
+          for f in install.ps1 install.sh; do
+            sed "s/__STV2_VERSION__/$VERSION/g" "scripts/$f" > "meta/scripts/$f"
+            if grep -q '__STV2_VERSION__' "meta/scripts/$f" || ! grep -qF "$VERSION" "meta/scripts/$f"; then
+              echo "::error::baking the version into $f failed"
+              exit 1
+            fi
+          done
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: meta
+          path: meta/
+          if-no-files-found: error
+
+  build-windows:
+    needs: verify
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      SOURCE_DATE_EPOCH: ${{ needs.verify.outputs.epoch }}
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false # release builds never reuse a cache
+
+      - name: Build SyncThingV2-Setup exe
+        shell: bash
+        run: |
+          numeric=${VERSION%%-*} # Windows version resources are numeric only
+          go run "$GO_WINRES" make --in packaging/windows/winres.json --arch amd64 \
+            --out cmd/stv2/rsrc --product-version "$numeric" --file-version "$numeric"
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=true \
+            -ldflags "-s -w -H windowsgui -X $MODULE/internal/brand.Version=$VERSION" \
+            -o "dist/SyncThingV2-Setup-$VERSION-windows-x64.exe" ./cmd/stv2
+
+      - name: Signing configured?
+        id: signing
+        shell: bash
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        run: |
+          if [ -n "$SIGNPATH_API_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Authenticode::SIGNPATH_API_TOKEN is not set; the exe is released unsigned."
+          fi
+      - name: Upload the unsigned exe for SignPath
+        id: unsigned
+        if: steps.signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-windows
+          path: dist/SyncThingV2-Setup-${{ env.VERSION }}-windows-x64.exe
+          if-no-files-found: error
+      - name: Sign with SignPath
+        if: steps.signing.outputs.enabled == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+      - name: Use the signed exe
+        if: steps.signing.outputs.enabled == 'true'
+        shell: powershell
+        run: |
+          $name = "SyncThingV2-Setup-$env:VERSION-windows-x64.exe"
+          $signed = Join-Path 'signed' $name
+          $sig = Get-AuthenticodeSignature -LiteralPath $signed
+          if ($sig.Status -ne 'Valid') { throw "SignPath returned $name with signature status $($sig.Status)." }
+          Copy-Item -LiteralPath $signed -Destination (Join-Path 'dist' $name) -Force
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-windows
+          path: dist/SyncThingV2-Setup-*.exe
+          if-no-files-found: error
+
+  build-linux:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      SOURCE_DATE_EPOCH: ${{ needs.verify.outputs.epoch }}
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build tarballs and .deb packages
+        run: |
+          for arch in amd64 arm64; do
+            case $arch in
+              amd64) label=x64 ;;
+              arm64) label=arm64 ;;
+            esac
+            out="dist/linux-$arch"
+            mkdir -p "$out"
+            GOOS=linux GOARCH=$arch go build -trimpath -buildvcs=true \
+              -ldflags "-s -w -X $MODULE/internal/brand.Version=$VERSION" \
+              -o "$out/stv2" ./cmd/stv2
+
+            stage=$(mktemp -d)
+            cp "$out/stv2" LICENSE THIRD_PARTY_NOTICES.md "$stage/"
+            chmod 0755 "$stage/stv2"
+            tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$SOURCE_DATE_EPOCH" \
+              -C "$stage" -cf - stv2 LICENSE THIRD_PARTY_NOTICES.md |
+              gzip -n -9 > "dist/SyncThingV2-$VERSION-linux-$label.tar.gz"
+
+            # An explicit file name: nfpm's own name for a prerelease turns
+            # 1.0.0-rc.1 into 1.0.0~rc.1 (the Debian version inside the package
+            # keeps that form), which would not match the asset names below.
+            STV2_VERSION=$VERSION STV2_ARCH=$arch STV2_BINARY=$out/stv2 \
+              go run "$NFPM" package --config packaging/linux/nfpm.yaml -p deb \
+              --target "dist/syncthing-v2_${VERSION}_${arch}.deb"
+          done
+          ls -l dist
+          for f in "dist/syncthing-v2_${VERSION}_amd64.deb" "dist/syncthing-v2_${VERSION}_arm64.deb"; do
+            [ -f "$f" ] || { echo "::error::$f was not built"; exit 1; }
+          done
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-linux
+          path: |
+            dist/SyncThingV2-*-linux-*.tar.gz
+            dist/syncthing-v2_*.deb
+          if-no-files-found: error
+
+  build-macos:
+    needs: verify
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      SOURCE_DATE_EPOCH: ${{ needs.verify.outputs.epoch }}
+      CGO_ENABLED: "1" # Cocoa
+      MACOSX_DEPLOYMENT_TARGET: "12.0" # matches LSMinimumSystemVersion
+      COPYFILE_DISABLE: "1" # no AppleDouble files in the tarball
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build arm64 and amd64
+        run: |
+          mkdir -p dist/macos
+          ldflags="-s -w -X $MODULE/internal/brand.Version=$VERSION"
+          GOOS=darwin GOARCH=arm64 go build -trimpath -buildvcs=true -ldflags "$ldflags" -o dist/macos/stv2-arm64 ./cmd/stv2
+          GOOS=darwin GOARCH=amd64 CC="clang -arch x86_64" go build -trimpath -buildvcs=true -ldflags "$ldflags" -o dist/macos/stv2-amd64 ./cmd/stv2
+
+      - name: Apple signing configured?
+        id: apple
+        env:
+          APPLE_DEVELOPER_ID_P12: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          if [ -n "$APPLE_DEVELOPER_ID_P12" ] && [ -n "$APPLE_ID" ] && [ -n "$APPLE_TEAM_ID" ] && [ -n "$APPLE_APP_PASSWORD" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Apple signing::Apple secrets are not set; the app is ad-hoc signed and not notarized."
+          fi
+      - name: Import the Developer ID certificate
+        if: steps.apple.outputs.enabled == 'true'
+        env:
+          APPLE_DEVELOPER_ID_P12: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          umask 077
+          printf '%s' "$APPLE_DEVELOPER_ID_P12" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$APPLE_DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/developer-id.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
+          set -- "$keychain"
+          while IFS= read -r kc; do
+            kc=${kc#*\"}
+            set -- "$@" "${kc%\"}"
+          done <<EOF
+          $(security list-keychains -d user)
+          EOF
+          security list-keychains -d user -s "$@"
+          identity=$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application/ { print $2; exit }')
+          if [ -z "$identity" ]; then
+            echo "::error::APPLE_DEVELOPER_ID_P12 holds no 'Developer ID Application' identity"
+            exit 1
+          fi
+          echo "STV2_CODESIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      - name: App bundle and disk image
+        run: |
+          # make-app.sh merges the two builds with lipo and signs ad hoc, or with
+          # STV2_CODESIGN_IDENTITY (hardened runtime) when it is set.
+          sh packaging/macos/make-app.sh "$VERSION" dist/macos dist/macos/stv2-arm64 dist/macos/stv2-amd64
+          app="dist/macos/SyncThing V2.app"
+          lipo -archs "$app/Contents/MacOS/stv2"
+          codesign --verify --strict --verbose=2 "$app"
+          sh packaging/macos/make-dmg.sh "$app" "dist/SyncThingV2-$VERSION-macos-universal.dmg"
+
+      - name: Notarize
+        if: steps.apple.outputs.enabled == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          dmg="dist/SyncThingV2-$VERSION-macos-universal.dmg"
+          codesign --force --sign "$STV2_CODESIGN_IDENTITY" --timestamp "$dmg"
+          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$dmg"
+          # The app inside was notarized with the image; staple its ticket too.
+          xcrun stapler staple "dist/macos/SyncThing V2.app"
+
+      - name: Tarball
+        run: tar -C dist/macos -czf "dist/SyncThingV2-$VERSION-macos-universal.tar.gz" "SyncThing V2.app"
+
+      - name: Remove the signing keychain
+        if: always() && steps.apple.outputs.enabled == 'true'
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-macos
+          path: |
+            dist/SyncThingV2-*-macos-universal.dmg
+            dist/SyncThingV2-*-macos-universal.tar.gz
+          if-no-files-found: error
+
+  installer-test:
+    needs: [verify, build-windows, build-linux, build-macos]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-14
+            platform: macos
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      # The scripts under test are the baked ones, so STV2_VERSION stays unset.
+      STV2_BASE_URL: http://127.0.0.1:8000
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ matrix.platform }}
+          path: serve
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: meta
+          path: meta
+      - name: Prepare the served release directory
+        shell: bash
+        run: |
+          cp meta/scripts/install.ps1 meta/scripts/install.sh serve/
+          cd serve || exit 1
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum -- * > SHA256SUMS.txt
+          else
+            shasum -a 256 -- * > SHA256SUMS.txt
+          fi
+          cat SHA256SUMS.txt
+
+      - name: Serve on 127.0.0.1:8000 (Windows)
+        if: matrix.platform == 'windows'
+        shell: powershell
+        run: |
+          Start-Process -FilePath python -ArgumentList @('-m', 'http.server', '8000', '--bind', '127.0.0.1', '--directory', 'serve') -WindowStyle Hidden
+      - name: Serve on 127.0.0.1:8000 (macOS, Linux)
+        if: matrix.platform != 'windows'
+        shell: bash
+        run: nohup python3 -m http.server 8000 --bind 127.0.0.1 --directory serve > "$RUNNER_TEMP/http.log" 2>&1 &
+      - name: Wait for the server
+        shell: bash
+        run: curl -fsS --retry 30 --retry-connrefused --retry-delay 1 -o /dev/null "$STV2_BASE_URL/SHA256SUMS.txt"
+
+      - name: One-liner install and checks (Windows)
+        if: matrix.platform == 'windows'
+        shell: powershell
+        run: |
+          # The documented one-liner with only the URL swapped, under the Restricted execution policy.
+          $oneLiner = '[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm http://127.0.0.1:8000/install.ps1 | iex'
+          powershell -NoProfile -ExecutionPolicy Restricted -Command $oneLiner
+          if ($LASTEXITCODE -ne 0) { throw "The one-liner failed with exit code $LASTEXITCODE." }
+
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\SyncThingV2\stv2.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "$exe was not installed." }
+          function Invoke-Stv2([string[]]$Arguments) {
+            $out = Join-Path $env:RUNNER_TEMP ('stv2-' + [guid]::NewGuid().ToString())
+            $p = Start-Process -FilePath $exe -ArgumentList $Arguments -NoNewWindow -PassThru -RedirectStandardOutput "$out.out" -RedirectStandardError "$out.err"
+            $null = $p.Handle
+            $p.WaitForExit()
+            $text = [IO.File]::ReadAllText("$out.out")
+            Write-Host "stv2 $($Arguments -join ' ') -> exit $($p.ExitCode)"
+            Write-Host $text
+            Write-Host ([IO.File]::ReadAllText("$out.err"))
+            return [pscustomobject]@{ Code = $p.ExitCode; Out = $text }
+          }
+
+          $v = Invoke-Stv2 @('version')
+          if ($v.Code -ne 0 -or -not $v.Out.Contains($env:VERSION)) { throw 'stv2 version did not report the released version.' }
+          # Exit status 1 is expected: the Tailscale checks fail on runners.
+          $d = Invoke-Stv2 @('doctor', '--json')
+          [IO.File]::WriteAllText((Join-Path $env:RUNNER_TEMP 'doctor.json'), $d.Out)
+
+          $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          $entry = (Get-ItemProperty -LiteralPath $run -Name SyncThingV2 -ErrorAction SilentlyContinue).SyncThingV2
+          if (-not $entry -or $entry -notmatch 'stv2\.exe') { throw 'The tray autostart Run value SyncThingV2 is missing.' }
+          if (-not (Test-Path -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SyncThingV2')) { throw 'The Uninstall key is missing.' }
+
+          $u = Invoke-Stv2 @('uninstall', '--yes')
+          if ($u.Code -ne 0) { throw 'stv2 uninstall --yes failed.' }
+          if ((Get-ItemProperty -LiteralPath $run -Name SyncThingV2 -ErrorAction SilentlyContinue)) { throw 'uninstall left the Run value SyncThingV2 behind.' }
+          if (Test-Path -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SyncThingV2') { throw 'uninstall left the Uninstall key behind.' }
+
+      - name: One-liner install and checks (macOS, Linux)
+        if: matrix.platform != 'windows'
+        shell: bash
+        run: |
+          # The documented one-liner with only the URL swapped.
+          curl -fsSL http://127.0.0.1:8000/install.sh | sh
+
+          if [ "$RUNNER_OS" = macOS ]; then
+            stv2="$HOME/Applications/SyncThing V2.app/Contents/MacOS/stv2"
+            autostart="$HOME/Library/LaunchAgents/io.github.neutx.syncthingv2.plist"
+          else
+            stv2="$HOME/.local/bin/stv2"
+            autostart="$HOME/.config/autostart/stv2.desktop"
+          fi
+          [ -x "$stv2" ] || { echo "::error::$stv2 was not installed"; exit 1; }
+
+          "$stv2" version | tee "$RUNNER_TEMP/version.txt"
+          grep -qF -- "$VERSION" "$RUNNER_TEMP/version.txt" || { echo "::error::stv2 version did not report $VERSION"; exit 1; }
+          # Exit status 1 is expected: the Tailscale checks fail on runners.
+          "$stv2" doctor --json > "$RUNNER_TEMP/doctor.json" || true
+          [ -f "$autostart" ] || { echo "::error::the tray autostart entry $autostart is missing"; exit 1; }
+
+          "$stv2" uninstall --yes
+          [ ! -e "$autostart" ] || { echo "::error::uninstall left $autostart behind"; exit 1; }
+
+      - name: Check stv2 doctor --json
+        shell: bash
+        run: |
+          py=python3
+          if [ "$RUNNER_OS" = Windows ]; then py=python; fi
+          "$py" - "$RUNNER_TEMP/doctor.json" <<'EOF'
+          import json, os, sys
+
+          # stv2 doctor --json has a fixed layout (internal/doctor/doctor.go,
+          # schema 1). Spec §9.1's "install.* checks" are these structural
+          # checks plus the checks an installation guarantees. TS*, NET001,
+          # ST00x, FW001, UI002 and UPD001 depend on the runner (no Tailscale,
+          # no running Syncthing, no admin, no session bus, network) and are
+          # only required to have a valid status.
+          CODES = ["TS001", "TS002", "ST001", "ST002", "ST003", "ST004", "ST005",
+                   "SEC001", "NET001", "FW001", "UI001", "UI002", "UPD001"]  # doctor.Codes, in order
+          SEVERITY = {"TS001": "high", "TS002": "high", "ST001": "high", "ST002": "high",
+                      "ST003": "high", "ST004": "warn", "ST005": "info", "SEC001": "high",
+                      "NET001": "warn", "FW001": "info", "UI001": "warn", "UI002": "warn",
+                      "UPD001": "info"}
+          GOOS = {"Windows": "windows", "Linux": "linux", "macOS": "darwin"}[os.environ["RUNNER_OS"]]
+
+          with open(sys.argv[1], encoding="utf-8-sig") as f:
+              doc = json.load(f)
+          print(json.dumps(doc, indent=2))
+          errors = []
+          def need(cond, msg):
+              if not cond:
+                  errors.append(msg)
+
+          need(doc.get("schema") == 1, f"schema is {doc.get('schema')!r}, want 1")
+          need(doc.get("os") == GOOS, f"os is {doc.get('os')!r}, want {GOOS!r}")
+          need(isinstance(doc.get("version"), str) and doc.get("version") != "", "version is missing")
+          checks = doc.get("checks")
+          findings = doc.get("findings")
+          summary = doc.get("summary")
+          need(isinstance(checks, list), "checks is not a list")
+          need(isinstance(findings, list), "findings is not a list (it must never be null)")
+          need(isinstance(summary, dict), "summary is not an object")
+          if not errors:
+              codes = [c.get("code") for c in checks]
+              need(codes == CODES, f"check codes are {codes}, want {CODES}")
+              status = {}
+              for c in checks:
+                  s = c.get("status")
+                  need(s in ("pass", "fail", "skip"), f"{c.get('code')}: status {s!r} is not pass, fail or skip")
+                  status[c.get("code")] = s
+              counts = {"high": 0, "warn": 0, "info": 0}
+              found = set()
+              for f in findings:
+                  code = f.get("code")
+                  need(code in SEVERITY, f"finding with unknown code {code!r}")
+                  need(f.get("severity") == SEVERITY.get(code), f"{code}: severity {f.get('severity')!r}, want {SEVERITY.get(code)!r}")
+                  need(bool(f.get("title")) and bool(f.get("message")) and bool(f.get("docs")), f"{code}: finding lacks title, message or docs")
+                  if f.get("severity") in counts:
+                      counts[f.get("severity")] += 1
+                  found.add(code)
+              for k in counts:
+                  need(summary.get(k) == counts[k], f"summary.{k} is {summary.get(k)!r}, but findings[] has {counts[k]}")
+              need(doc.get("ok") is (counts["high"] == 0), f"ok is {doc.get('ok')!r} with {counts['high']} high findings")
+              for code in CODES:
+                  need((status.get(code) == "fail") == (code in found), f"{code}: status {status.get(code)!r} does not match findings[]")
+              # Guaranteed by the installation.
+              need(status.get("SEC001") != "fail", "SEC001 failed: the installed Syncthing exposes its control panel")
+              if GOOS == "windows":
+                  # UI001 must agree with the runner. The WebView2 runtime is
+                  # registered under EdgeUpdate\Clients with a "pv" version;
+                  # windows-latest ships it. Should an image ever lack it, a
+                  # failing UI001 is correct and only reported.
+                  import winreg
+                  WV2 = r"Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+                  def webview2_version():
+                      for root, path in ((winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\WOW6432Node\\" + WV2),
+                                         (winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\" + WV2),
+                                         (winreg.HKEY_CURRENT_USER, "Software\\" + WV2)):
+                          try:
+                              with winreg.OpenKey(root, path) as key:
+                                  v = winreg.QueryValueEx(key, "pv")[0]
+                          except OSError:
+                              continue
+                          if v and v != "0.0.0.0":
+                              return v
+                      return ""
+                  if webview2_version():
+                      need(status.get("UI001") == "pass", f"UI001 is {status.get('UI001')!r}, but the runner has the WebView2 runtime {webview2_version()}")
+                  else:
+                      print(f"::warning::this runner has no WebView2 runtime; UI001 is {status.get('UI001')!r}")
+              else:
+                  need(status.get("UI001") == "skip", f"UI001 is {status.get('UI001')!r} on {GOOS}, want skip")
+                  need(status.get("FW001") == "skip", f"FW001 is {status.get('FW001')!r} on {GOOS}, want skip")
+              if GOOS != "linux":
+                  need(status.get("UI002") == "skip", f"UI002 is {status.get('UI002')!r} on {GOOS}, want skip")
+          for e in errors:
+              print(f"::error::stv2 doctor --json: {e}")
+          print(f"doctor: {len(errors)} problems with the report")
+          sys.exit(1 if errors else 0)
+          EOF
+
+  publish:
+    needs: [verify, build-windows, build-linux, build-macos, installer-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: assets
+          merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: meta
+          path: meta
+
+      - name: Assemble assets and SHA256SUMS.txt
+        run: |
+          cp meta/scripts/install.ps1 meta/scripts/install.sh assets/
+          if grep -l '__STV2_VERSION__' assets/install.ps1 assets/install.sh; then
+            echo "::error::an install script still has the version placeholder"
+            exit 1
+          fi
+          cd assets || exit 1
+          for f in "SyncThingV2-Setup-$VERSION-windows-x64.exe" \
+                   "SyncThingV2-$VERSION-linux-x64.tar.gz" "SyncThingV2-$VERSION-linux-arm64.tar.gz" \
+                   "syncthing-v2_${VERSION}_amd64.deb" "syncthing-v2_${VERSION}_arm64.deb" \
+                   "SyncThingV2-$VERSION-macos-universal.dmg" "SyncThingV2-$VERSION-macos-universal.tar.gz" \
+                   install.ps1 install.sh; do
+            [ -f "$f" ] || { echo "::error::missing release asset $f"; exit 1; }
+          done
+          sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS.txt"
+          mv "$RUNNER_TEMP/SHA256SUMS.txt" SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Build provenance attestations
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: assets/*
+
+      - name: Draft GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -- --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "SyncThing V2 $VERSION" --notes-file meta/notes.md
+          if [ "$PRERELEASE" = true ]; then
+            set -- "$@" --prerelease
+          fi
+          gh release create "$GITHUB_REF_NAME" "$@" assets/*

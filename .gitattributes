@@ -1,0 +1,19 @@
+# Normalise text to LF in the repository and the working tree.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF so Windows PowerShell 5.1 and cmd read them natively.
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary assets
+*.png binary
+*.ico binary
+*.icns binary
+*.syso binary
+*.zip binary
+*.gz binary
+*.dmg binary
+*.deb binary

@@ -1,0 +1,6 @@
+<configuration version="37">
+    <gui enabled="false" tls="false">
+        <address>127.0.0.1:8384</address>
+        <apikey>synthetic-api-key-disabled</apikey>
+    </gui>
+</configuration>

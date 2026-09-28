@@ -1,0 +1,107 @@
+name: Bug report
+description: Something in SyncThing V2 does not work as expected, or a report from a Preview platform (macOS, Linux).
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Please keep personal data out of this public issue:** replace host names,
+        user names, email addresses, tailnet names, tailnet IPs (100.x.y.z), folder paths and folder IDs
+        with placeholders such as `laptop-1` or `100.64.0.1`, and shorten every device ID to its first
+        7 characters (for example `ABCDEFG`).
+
+        Security problems go through a private report instead; see SECURITY.md.
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Preview)
+        - Linux (Preview)
+    validations:
+      required: true
+
+  - type: input
+    id: os-details
+    attributes:
+      label: OS version and desktop
+      description: For example "Windows 11 24H2", "macOS 15.1", or "Ubuntu 24.04, GNOME on Wayland".
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: SyncThing V2 version
+      description: The first line of `stv2 version`.
+      placeholder: "stv2 1.0.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How was it installed?
+      options:
+        - PowerShell one-liner
+        - Setup .exe from GitHub Releases
+        - curl | sh one-liner
+        - .dmg
+        - .deb
+        - .tar.gz
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the dashboard from the tray
+        2. Click Pair on ...
+        3. ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `stv2 doctor --json`
+      description: |
+        Run `stv2 doctor --json` and paste the output. Before posting, truncate every device ID to its
+        first 7 characters and replace host names, user names, tailnet IPs and paths with placeholders.
+      render: json
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log excerpt (optional)
+      description: |
+        The relevant lines from the SyncThing V2 log ("Copy diagnostics" in the dashboard gives a
+        redacted summary). Apply the same redactions as above.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I removed personal data (names, IPs, paths) and shortened device IDs to 7 characters.
+          required: true
+        - label: I searched the existing issues for this problem.
+          required: true

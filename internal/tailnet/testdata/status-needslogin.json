@@ -1,0 +1,17 @@
+{
+  "Version": "1.90.0-t0000000-g0000000",
+  "BackendState": "NeedsLogin",
+  "AuthURL": "",
+  "TailscaleIPs": null,
+  "Self": {
+    "ID": "",
+    "HostName": "example-desk",
+    "DNSName": "",
+    "OS": "windows",
+    "UserID": 0,
+    "TailscaleIPs": null,
+    "Online": false
+  },
+  "Peer": null,
+  "User": null
+}

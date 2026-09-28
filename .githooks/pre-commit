@@ -1,0 +1,41 @@
+#!/bin/sh
+# Pre-commit guard. Enable it once per clone with:
+#   git config core.hooksPath .githooks
+#
+# 1. scripts/privacy-check.sh --staged: the staged content must not contain any
+#    entry of the private denylist (.git/info/privacy-denylist or $PRIVACY_DENYLIST).
+#    Without a denylist the check is skipped with a notice.
+# 2. scripts/privacy-check.sh --identity: warns (without blocking) when the
+#    author or committer identity of this commit contains a denylist entry.
+#    The identity is the maintainer's choice (spec D3), so it never blocks.
+# 3. gitleaks on the staged changes, when gitleaks is installed.
+set -eu
+
+top=$(git rev-parse --show-toplevel)
+
+if ! sh "$top/scripts/privacy-check.sh" --staged; then
+    echo "pre-commit: commit blocked by the privacy check." >&2
+    exit 1
+fi
+
+rc=0
+sh "$top/scripts/privacy-check.sh" --identity >/dev/null || rc=$?
+case $rc in
+    0) ;;
+    1) echo "pre-commit: warning: this commit's author or committer identity contains denylisted text; it becomes public when pushed. Set a repo-local user.email (e.g. a GitHub noreply address) to avoid that." >&2 ;;
+    *) echo "pre-commit: warning: the commit identity could not be checked." >&2 ;;
+esac
+
+if command -v gitleaks >/dev/null 2>&1; then
+    # gitleaks 8.19+ scans staged changes with "git --pre-commit --staged";
+    # older releases use "protect --staged".
+    if gitleaks git --help >/dev/null 2>&1; then
+        set -- git --pre-commit --staged --redact --no-banner "$top"
+    else
+        set -- protect --staged --redact --no-banner --source "$top"
+    fi
+    if ! gitleaks "$@"; then
+        echo "pre-commit: commit blocked by gitleaks." >&2
+        exit 1
+    fi
+fi

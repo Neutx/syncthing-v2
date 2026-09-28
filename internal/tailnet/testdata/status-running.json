@@ -1,0 +1,89 @@
+{
+  "Version": "1.90.0-t0000000-g0000000",
+  "TUN": true,
+  "BackendState": "Running",
+  "TailscaleIPs": ["100.64.0.1", "fd7a:115c:a1e0::1"],
+  "Self": {
+    "ID": "nSELF0000CNTRL",
+    "PublicKey": "nodekey:0000000000000000000000000000000000000000000000000000000000000001",
+    "HostName": "example-desk",
+    "DNSName": "example-desk.tailnet-example.ts.net.",
+    "OS": "windows",
+    "UserID": 1001,
+    "TailscaleIPs": ["100.64.0.1", "fd7a:115c:a1e0::1"],
+    "Online": true
+  },
+  "Peer": {
+    "nodekey:0000000000000000000000000000000000000000000000000000000000000002": {
+      "ID": "nLAPTOP000CNTRL",
+      "HostName": "example-laptop",
+      "DNSName": "example-laptop.tailnet-example.ts.net.",
+      "OS": "windows",
+      "UserID": 1001,
+      "TailscaleIPs": ["100.64.0.2", "fd7a:115c:a1e0::2"],
+      "Online": true
+    },
+    "nodekey:0000000000000000000000000000000000000000000000000000000000000003": {
+      "ID": "nMAC00000CNTRL",
+      "HostName": "Example-Mac",
+      "DNSName": "example-mac.tailnet-example.ts.net.",
+      "OS": "macOS",
+      "UserID": 1001,
+      "TailscaleIPs": ["fd7a:115c:a1e0::3", "100.64.0.3"],
+      "Online": true
+    },
+    "nodekey:0000000000000000000000000000000000000000000000000000000000000004": {
+      "ID": "nOFFLINE0CNTRL",
+      "HostName": "example-offline",
+      "DNSName": "example-offline.tailnet-example.ts.net.",
+      "OS": "linux",
+      "UserID": 1001,
+      "TailscaleIPs": ["100.64.0.4"],
+      "Online": false
+    },
+    "nodekey:0000000000000000000000000000000000000000000000000000000000000005": {
+      "ID": "nSHAREE00CNTRL",
+      "HostName": "shared-in-box",
+      "DNSName": "shared-in-box.other-example.ts.net.",
+      "OS": "linux",
+      "UserID": 3003,
+      "TailscaleIPs": ["100.64.0.5"],
+      "Online": true,
+      "ShareeNode": true
+    },
+    "nodekey:0000000000000000000000000000000000000000000000000000000000000006": {
+      "ID": "nTAGGED00CNTRL",
+      "HostName": "example-server",
+      "DNSName": "example-server.tailnet-example.ts.net.",
+      "OS": "linux",
+      "UserID": 1001,
+      "TailscaleIPs": ["100.64.0.6"],
+      "Online": true,
+      "Tags": ["tag:server"]
+    },
+    "nodekey:0000000000000000000000000000000000000000000000000000000000000007": {
+      "ID": "nPHONE000CNTRL",
+      "HostName": "example-phone",
+      "DNSName": "example-phone.tailnet-example.ts.net.",
+      "OS": "iOS",
+      "UserID": 1001,
+      "TailscaleIPs": ["100.64.0.7"],
+      "Online": true
+    },
+    "nodekey:0000000000000000000000000000000000000000000000000000000000000008": {
+      "ID": "nFRIEND00CNTRL",
+      "HostName": "friend-pc",
+      "DNSName": "friend-pc.tailnet-example.ts.net.",
+      "OS": "linux",
+      "UserID": 2002,
+      "TailscaleIPs": ["100.64.0.8"],
+      "Online": true
+    }
+  },
+  "User": {
+    "1001": {"ID": 1001, "LoginName": "owner@example.com", "DisplayName": "Example Owner"},
+    "2002": {"ID": 2002, "LoginName": "friend@example.org", "DisplayName": "Example Friend"},
+    "3003": {"ID": 3003, "LoginName": "sharer@example.net", "DisplayName": "Example Sharer"}
+  },
+  "CurrentTailnet": {"Name": "tailnet-example.ts.net", "MagicDNSSuffix": "tailnet-example.ts.net", "MagicDNSEnabled": true}
+}

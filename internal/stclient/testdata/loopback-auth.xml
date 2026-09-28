@@ -1,0 +1,9 @@
+<configuration version="37">
+    <gui enabled="true" tls="false" debugging="false">
+        <address>127.0.0.1:28384</address>
+        <user>example-user</user>
+        <password>$2a$10$syntheticbcrypthashsyntheticbcrypthashsyntheticbcrypt</password>
+        <apikey>  synthetic-key-with-spaces  </apikey>
+        <theme>default</theme>
+    </gui>
+</configuration>

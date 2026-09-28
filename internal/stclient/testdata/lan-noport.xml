@@ -1,0 +1,7 @@
+<configuration version="37">
+    <gui enabled="true">
+        <address>192.0.2.10</address>
+        <apikey>synthetic-api-key-lan</apikey>
+        <insecureAdminAccess>false</insecureAdminAccess>
+    </gui>
+</configuration>

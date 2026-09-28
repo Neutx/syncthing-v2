@@ -1,0 +1,6 @@
+<configuration version="37">
+    <gui enabled="true" tls="true">
+        <address>127.0.0.1:8384</address>
+        <apikey>synthetic-api-key-tls</apikey>
+    </gui>
+</configuration>

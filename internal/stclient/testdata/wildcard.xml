@@ -1,0 +1,13 @@
+<configuration version="37">
+    <folder id="exmpl-00001" label="Example" path="/srv/example" type="sendreceive"></folder>
+    <device id="AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH" name="example-a"></device>
+    <gui enabled="true" tls="false" debugging="false" sendBasicAuthPrompt="false">
+        <address>0.0.0.0:18384</address>
+        <apikey>synthetic-api-key-0123456789abcd</apikey>
+        <theme>default</theme>
+        <insecureAdminAccess>true</insecureAdminAccess>
+    </gui>
+    <options>
+        <listenAddress>default</listenAddress>
+    </options>
+</configuration>

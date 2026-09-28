@@ -1,0 +1,46 @@
+name: Feature request
+description: Suggest an improvement or a new capability for SyncThing V2.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        SyncThing V2 pairs computers over Tailscale and shows Syncthing's status in the tray. Advanced
+        Syncthing settings stay in Syncthing's own web UI, which is outside this project's scope.
+        Please keep personal data (host names, tailnet IPs, device IDs, paths) out of this issue.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How should SyncThing V2 behave? Mention the platforms it applies to.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you use now, or other designs you thought about.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: platforms
+    attributes:
+      label: Platforms
+      multiple: true
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true

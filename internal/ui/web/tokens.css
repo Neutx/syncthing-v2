@@ -1,0 +1,64 @@
+/* D12 design tokens, verbatim from the prototype (Dashboard.cs). Change them
+   here only; app.css and app.js read them through var(--...). */
+:root {
+  /* Text colours. Every token under 12px clears 4.5:1 on the glass. */
+  --fg: #F6F8FC;
+  --dim: #BCC2CE;
+  --faint: #9AA3A8;
+  --accent: #60A6FF;
+
+  /* State colours */
+  --st-insync: #3AC672;
+  --st-syncing: #569CF6;
+  --st-scanning: #F0B838;
+  --st-error: #EE5C52;   /* NoPeer and Error */
+  --st-paused: #96969E;
+  --st-down: #787C86;    /* Down and Unauthorized */
+  --bar-idle: #8C92A0;   /* progress bar when paused or down */
+
+  /* Window and grid (px). One grid, derived from the rim. */
+  --win-w: 460px;
+  --win-h: 640px;
+  --win-radius: 40px;
+  --pad-x: 30px;         /* PadX: content inset from the window edge */
+  --col-l: 46px;         /* ColL: the single text column */
+  --col-r: 414px;        /* ColR: right-aligned values land here */
+  --col-2: 230px;        /* Col2: shared 2-column pitch */
+  --card-w: 400px;
+  --card-radius: 16px;
+  --card-gap: 12px;
+  --btn-h: 34px;
+  --btn-gap: 7px;
+  --btn-radius: 11px;
+
+  /* Type sizes */
+  --fs-title: 15.5pt;
+  --fs-value: 11.5pt;
+  --fs-sub: 9pt;
+  --fs-btn: 8.5pt;
+  --fs-mono: 8.5pt;
+  --fs-label: 7.5pt;
+
+  /* Fonts, with per-OS fallbacks */
+  --font: "Segoe UI", -apple-system, "SF Pro Text", Cantarell, Inter, "DejaVu Sans", sans-serif;
+  --font-semibold: "Segoe UI Semibold", "Segoe UI", -apple-system, "SF Pro Text", Cantarell, Inter, "DejaVu Sans", sans-serif;
+  --mono: Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace;
+
+  /* Materials (D4) */
+  --scrim-rgb: 8, 9, 13;
+  --card-floor: rgba(10, 12, 17, 0.408);     /* alpha 104 legibility floor */
+  --card-sheen: rgba(255, 255, 255, 0.078);  /* alpha 20 */
+  --card-rim: rgba(255, 255, 255, 0.133);    /* alpha 34 */
+  --card-top: rgba(255, 255, 255, 0.212);    /* alpha 54 */
+  --btn-fill: rgba(255, 255, 255, 0.063);    /* alpha 16 */
+  --btn-fill-hover: rgba(255, 255, 255, 0.165); /* alpha 16 + 26 */
+  --btn-rim: rgba(255, 255, 255, 0.165);     /* alpha 42 */
+  --btn-rim-hover: rgba(255, 255, 255, 0.447); /* alpha 42 + 72 */
+  --btn-top: rgba(255, 255, 255, 0.173);     /* alpha 44 */
+  --btn-top-hover: rgba(255, 255, 255, 0.502); /* alpha 44 + 84 */
+  --btn-text: #E6EAF2;
+
+  /* Motion (D11) */
+  --enter-s: 0.34s;
+  --exit-s: 0.18s;
+}

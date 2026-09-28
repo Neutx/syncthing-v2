@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=SyncThing V2
+GenericName=Folder Sync Tray
+Comment=Pair Syncthing devices over Tailscale and see sync status in the tray
+Exec=stv2
+Icon=stv2
+Terminal=false
+Categories=Network;FileTransfer;Utility;
+Keywords=syncthing;tailscale;sync;folder;tray;
+StartupNotify=false

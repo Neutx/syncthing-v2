@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>SyncThing V2</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+<script src="anim.js" defer></script>
+<script src="app.js" defer></script>
+</head>
+<body class="mode-browser">
+<div class="wrap">
+<div id="stage" class="stage">
+  <div id="backdrop" class="backdrop" aria-hidden="true"></div>
+  <div id="scrim" class="scrim" aria-hidden="true"></div>
+  <canvas id="fx-under" class="fx" aria-hidden="true"></canvas>
+
+  <main id="content" class="content">
+
+    <!-- ===================== Status ===================== -->
+    <section id="view-status" class="view view-status" aria-label="Status">
+      <header class="head">
+        <canvas id="glyph" class="glyph" aria-hidden="true"></canvas>
+        <h1 id="headline" class="headline">Connecting</h1>
+        <p id="subline" class="subline">Waiting for status</p>
+        <nav class="head-nav" aria-label="Views">
+          <button id="nav-pair" class="icon-btn" type="button" aria-label="Pair devices" title="Pair devices">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.2 11.8l3.6-3.6M7 9.3l-1.9 1.9a2.9 2.9 0 004.1 4.1l1.9-1.9M13 10.7l1.9-1.9a2.9 2.9 0 00-4.1-4.1L8.9 6.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            <span id="pair-badge" class="count-badge" hidden></span>
+          </button>
+          <button id="nav-settings" class="icon-btn" type="button" aria-label="Settings" title="Settings">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="2.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 2.8v2M10 15.2v2M2.8 10h2M15.2 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M4.9 15.1l1.4-1.4M13.7 6.3l1.4-1.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+        </nav>
+      </header>
+
+      <div id="notice" class="notice" role="region" aria-label="Notice" hidden>
+        <div class="notice-top">
+          <p id="notice-title" class="notice-title"></p>
+          <button id="notice-next" class="pager" type="button" aria-label="Next notice" hidden></button>
+        </div>
+        <p id="notice-body" class="notice-body" hidden></p>
+        <p id="notice-warn" class="notice-warn" hidden></p>
+        <div id="notice-actions" class="notice-actions"></div>
+      </div>
+
+      <article class="card card-conn" aria-labelledby="lbl-conn">
+        <h2 id="lbl-conn" class="label">CONNECTION</h2>
+        <span class="presence" aria-hidden="true"><span id="presence-halo" class="halo"></span><span id="presence-dot" class="dot"></span></span>
+        <p class="conn-name"><span id="peer-name" class="value">No device connected</span><span id="peer-more" class="more"></span></p>
+        <p id="peer-via" class="conn-via">Waiting for a device</p>
+        <p id="peer-addr" class="conn-addr mono">not connected</p>
+        <span id="peer-pill" class="pill">OFFLINE</span>
+      </article>
+
+      <article class="card card-sync" aria-labelledby="lbl-sync">
+        <h2 id="lbl-sync" class="label">SYNC PROGRESS</h2>
+        <p id="sync-big" class="sync-big">-</p>
+        <p id="files-line" class="sync-files"></p>
+        <canvas id="bar" class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Sync progress"></canvas>
+        <p id="size-line" class="sync-size"></p>
+        <p id="need-line" class="sync-need">nothing queued</p>
+      </article>
+
+      <article class="card card-xfer" aria-labelledby="lbl-xfer">
+        <h2 id="lbl-xfer" class="label">TRANSFER</h2>
+        <div class="rate rate-dn">
+          <p class="rate-label">Download</p>
+          <p id="rate-dn" class="rate-val">0 KB/s</p>
+          <span class="meter"><span id="meter-dn" class="meter-fill"></span></span>
+        </div>
+        <div class="rate rate-up">
+          <p class="rate-label">Upload</p>
+          <p id="rate-up" class="rate-val">0 KB/s</p>
+          <span class="meter"><span id="meter-up" class="meter-fill"></span></span>
+        </div>
+        <p id="xfer-state" class="xfer-state">idle</p>
+        <p id="startup-label" class="startup-label">Starts at login</p>
+        <p class="sdot sdot-st"><span class="sdot-halo" aria-hidden="true"></span><span class="sdot-dot" aria-hidden="true"></span><span id="sd-st" class="sdot-text">Syncthing</span></p>
+        <p class="sdot sdot-tray"><span class="sdot-halo" aria-hidden="true"></span><span class="sdot-dot" aria-hidden="true"></span><span id="sd-tray" class="sdot-text">Tray</span></p>
+      </article>
+
+      <article class="card card-act" aria-labelledby="lbl-act">
+        <h2 id="lbl-act" class="label">RECENT ACTIVITY</h2>
+        <span class="act-rule" aria-hidden="true"></span>
+        <ol id="activity" class="activity"></ol>
+        <p id="act-empty" class="act-empty">Nothing to report</p>
+      </article>
+
+      <div class="buttons">
+        <button class="btn" type="button" data-cmd="rescan">Rescan</button>
+        <button class="btn" type="button" data-cmd="pause" id="btn-pause">Pause</button>
+        <button class="btn" type="button" data-cmd="folder" id="btn-folder" aria-haspopup="menu">Folder</button>
+        <button class="btn" type="button" data-cmd="web">Web UI</button>
+        <button class="btn" type="button" data-cmd="restart">Restart</button>
+      </div>
+      <div id="folder-menu" class="popover" role="menu" aria-label="Open a sync folder" hidden></div>
+    </section>
+
+    <!-- ===================== Pair ===================== -->
+    <section id="view-pair" class="view view-page" aria-label="Pair devices" hidden>
+      <header class="subhead">
+        <button class="icon-btn back" type="button" data-back aria-label="Back to status" title="Back">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12 4.5L6.5 10l5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <h1 class="subhead-title">Pair devices</h1>
+        <button id="pair-refresh" class="small-btn" type="button">Refresh</button>
+      </header>
+      <div class="scroll">
+        <div id="ts-card" class="card card-flow" hidden>
+          <p class="flow-title">Tailscale is not installed</p>
+          <p class="flow-text">SyncThing V2 finds your other computers through Tailscale. Install it, sign in on every computer, then come back and press Refresh.</p>
+          <div class="flow-actions"><button id="ts-install" class="small-btn" type="button" hidden>Install with winget</button></div>
+        </div>
+        <p id="pair-msg" class="card card-flow pair-msg" role="status" hidden></p>
+
+        <section id="sec-requests" class="section" hidden>
+          <h2 class="section-label">REQUESTS</h2>
+          <div id="list-requests" class="card card-list"></div>
+        </section>
+
+        <section id="sec-share" class="section" hidden>
+          <h2 class="section-label">SHARE A FOLDER</h2>
+          <div class="card card-list">
+            <p class="list-head">Folder</p>
+            <div id="share-folders" class="choices" role="radiogroup" aria-label="Folder to share"></div>
+            <p class="list-head">With</p>
+            <div id="share-devices" class="choices" aria-label="Devices"></div>
+            <div class="flow-actions pad">
+              <button id="share-go" class="small-btn primary" type="button" disabled>Share</button>
+              <button id="share-cancel" class="small-btn" type="button">Cancel</button>
+            </div>
+          </div>
+        </section>
+
+        <div id="pair-lists">
+          <section class="section">
+            <h2 class="section-label">YOUR DEVICES</h2>
+            <div id="list-own" class="card card-list"></div>
+          </section>
+          <section class="section">
+            <h2 class="section-label">OTHER PEOPLE'S DEVICES</h2>
+            <div id="list-other" class="card card-list"></div>
+          </section>
+          <div class="flow-actions">
+            <button id="share-open" class="small-btn" type="button">Share a folder…</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== Welcome (--setup and first run) ===================== -->
+    <section id="view-welcome" class="view view-page" aria-label="Welcome" hidden>
+      <header class="subhead">
+        <button class="icon-btn back" type="button" data-back aria-label="Back to status" title="Back">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12 4.5L6.5 10l5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <h1 class="subhead-title">Welcome</h1>
+      </header>
+      <div class="scroll">
+        <section class="section">
+          <h2 class="section-label">SYNCTHING</h2>
+          <div class="card card-list">
+            <p id="wel-st" class="set-help" role="status">Looking for Syncthing…</p>
+            <div id="wel-st-actions" class="flow-actions pad" hidden><button id="wel-st-start" class="small-btn" type="button">Start Syncthing</button></div>
+          </div>
+        </section>
+
+        <section class="section">
+          <h2 class="section-label">TAILSCALE</h2>
+          <div class="card card-list">
+            <p id="wel-ts" class="set-help">Checking for Tailscale…</p>
+            <div id="wel-ts-actions" class="flow-actions pad" hidden><button id="wel-ts-install" class="small-btn" type="button">Install with winget</button></div>
+          </div>
+        </section>
+
+        <section class="section">
+          <h2 class="section-label">STARTUP</h2>
+          <div class="card card-list">
+            <div class="set-row">
+              <span id="lbl-wel-as-tray" class="set-text">Start SyncThing V2 at login</span>
+              <button id="wel-as-tray" class="switch" type="button" role="switch" aria-checked="false" aria-labelledby="lbl-wel-as-tray"><span class="knob"></span></button>
+            </div>
+          </div>
+        </section>
+
+        <section id="wel-fw-sec" class="section" hidden>
+          <h2 class="section-label">FIREWALL</h2>
+          <div class="card card-list">
+            <p class="set-help">Allow Syncthing through Windows Firewall for your tailnet and local network. Windows asks for administrator approval. Sync usually works without it, because only one side of a pair needs to accept connections.</p>
+            <div class="flow-actions pad"><button id="wel-fw" class="small-btn" type="button">Allow through firewall</button></div>
+          </div>
+        </section>
+
+        <div class="flow-actions"><button id="wel-done" class="small-btn primary" type="button">Continue to Pair devices</button></div>
+      </div>
+    </section>
+
+    <!-- ===================== Settings / About ===================== -->
+    <section id="view-settings" class="view view-page" aria-label="Settings" hidden>
+      <header class="subhead">
+        <button class="icon-btn back" type="button" data-back aria-label="Back to status" title="Back">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12 4.5L6.5 10l5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <h1 class="subhead-title">Settings</h1>
+      </header>
+      <div class="scroll">
+        <section class="section">
+          <h2 class="section-label">STARTUP</h2>
+          <div class="card card-list">
+            <div class="set-row">
+              <span id="lbl-as-tray" class="set-text">Start SyncThing V2 at login</span>
+              <button id="as-tray" class="switch" type="button" role="switch" aria-checked="false" aria-labelledby="lbl-as-tray"><span class="knob"></span></button>
+            </div>
+            <div class="set-row">
+              <span class="set-text"><span id="lbl-as-st">Start Syncthing at login</span><span id="as-st-note" class="set-note" hidden>Configured outside SyncThing V2</span></span>
+              <button id="as-st" class="switch" type="button" role="switch" aria-checked="false" aria-labelledby="lbl-as-st"><span class="knob"></span></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <h2 class="section-label">TRANSPORT PROFILE</h2>
+          <div class="card card-list">
+            <div class="segmented" role="radiogroup" aria-label="Transport profile">
+              <button id="prof-tailnet" class="seg" type="button" role="radio" aria-checked="false" data-profile="tailnet">Tailnet only</button>
+              <button id="prof-hybrid" class="seg" type="button" role="radio" aria-checked="false" data-profile="hybrid">Hybrid</button>
+            </div>
+            <p id="prof-text" class="set-help"></p>
+            <div id="prof-confirm" class="confirm" hidden>
+              <p id="prof-confirm-text" class="set-help strong"></p>
+              <div class="flow-actions">
+                <button id="prof-apply" class="small-btn primary" type="button">Apply</button>
+                <button id="prof-cancel" class="small-btn" type="button">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <h2 class="section-label">NOTIFICATIONS AND UPDATES</h2>
+          <div class="card card-list">
+            <div class="set-row">
+              <span id="lbl-notif" class="set-text">Show notifications</span>
+              <button id="pref-notif" class="switch" type="button" role="switch" aria-checked="false" aria-labelledby="lbl-notif"><span class="knob"></span></button>
+            </div>
+            <div class="set-row">
+              <span class="set-text"><span id="lbl-upd">Check for updates</span><span class="set-note">One anonymous request to GitHub a day</span></span>
+              <button id="pref-upd" class="switch" type="button" role="switch" aria-checked="false" aria-labelledby="lbl-upd"><span class="knob"></span></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <h2 class="section-label">SUPPORT</h2>
+          <div class="card card-list">
+            <div class="flow-actions pad">
+              <button id="copy-diag" class="small-btn" type="button">Copy diagnostics</button>
+              <button id="open-logs" class="small-btn" type="button">Open logs folder</button>
+            </div>
+            <p class="set-help">Diagnostics are redacted: no API key, shortened device IDs, no file paths.</p>
+          </div>
+        </section>
+
+        <section class="section">
+          <h2 class="section-label">ABOUT</h2>
+          <div class="card card-list about">
+            <p id="about-name" class="about-name">SyncThing V2</p>
+            <p id="about-repo" class="about-repo mono"></p>
+            <p id="about-disclaimer" class="about-text"></p>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <canvas id="fx-over" class="fx fx-over" aria-hidden="true"></canvas>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="expired" class="expired" role="alert" hidden>
+    <p class="flow-title">Session ended</p>
+    <p class="flow-text">Open the dashboard again from the SyncThing V2 tray icon.</p>
+  </div>
+</div>
+</div>
+</body>
+</html>

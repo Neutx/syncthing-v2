@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Neutx/syncthing-v2/security/advisories/new
+    about: Please report vulnerabilities privately through a GitHub security advisory, not in a public issue.
+  - name: Security policy
+    url: https://github.com/Neutx/syncthing-v2/blob/main/SECURITY.md
+    about: What to include in a report, which versions are supported and how reports are handled (SECURITY.md).
+  - name: Questions about Syncthing itself
+    url: https://forum.syncthing.net/
+    about: Problems with Syncthing (not SyncThing V2) belong in the Syncthing community forum.
