@@ -335,7 +335,7 @@ try {
     # such scroll offset; "end" picks the largest one that shows the whole
     # last section. The chosen offset must keep the bottom edge clean, which
     # is checked here and again right before the capture.
-    function Set-ViewScroll([string]$Mode) {
+    function Select-ViewScroll([string]$Mode) {
         $js = @'
 (() => {
   const mode = '__MODE__';
@@ -397,7 +397,7 @@ try {
         Write-Host ("Captured assets/screenshots/{0}.png ({1}x{2}, {3} bytes, scrolled {4} px)" -f $Name, $size.Width, $size.Height, $size.Bytes, $ScrollTop)
     }
 
-    function Save-View([string]$View) {
+    function Save-View([string]$View, [int]$Settle) {
         $body = @{ next = "/?mode=glass&demo=$View" } | ConvertTo-Json -Compress
         $launch = Invoke-RestMethod -Method Post -Uri "$base/api/launch" -UseBasicParsing `
             -Headers @{ Authorization = "Bearer $token"; 'X-STV2' = '1' } -ContentType 'application/json' -Body $body
@@ -413,16 +413,16 @@ try {
             Start-Sleep -Milliseconds 150
         }
         # Time for the first state snapshot and, on the Pair view, the discovery round.
-        Start-Sleep -Milliseconds $SettleMs
+        Start-Sleep -Milliseconds $Settle
 
-        $s = Set-ViewScroll 'fit'
+        $s = Select-ViewScroll 'fit'
         Start-Sleep -Milliseconds 300
         Save-Capture $View $s
 
         # The About section (name, version, repository, disclaimer) sits
         # below the fold of the Settings view: capture it scrolled to the end.
         if ($View -eq 'settings') {
-            $s = Set-ViewScroll 'end'
+            $s = Select-ViewScroll 'end'
             Start-Sleep -Milliseconds 300
             $about = Get-PageValue @'
 (() => {
@@ -445,7 +445,7 @@ try {
             try {
                 if ($null -eq $script:CdpSocket -or
                     $script:CdpSocket.State -ne [System.Net.WebSockets.WebSocketState]::Open) { Open-Tab }
-                Save-View $view
+                Save-View $view $SettleMs
                 break
             } catch {
                 if ($try -ge $attempts) { throw }
