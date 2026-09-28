@@ -213,8 +213,11 @@ func redactHome(s string) string {
 	for _, h := range []string{home, filepath.ToSlash(home)} {
 		s = strings.ReplaceAll(s, h, "<path>")
 	}
-	user := filepath.Base(home)
-	if len(user) < 2 || user == "." || user == string(filepath.Separator) {
+	// The account name is the last element whichever separator the path
+	// uses, so a Windows-style home is handled on every platform.
+	trimmed := strings.TrimRight(home, `/\`)
+	user := trimmed[strings.LastIndexAny(trimmed, `/\`)+1:]
+	if len(user) < 2 || user == "." || user == ".." || strings.HasSuffix(user, ":") {
 		return s
 	}
 	re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(user))
