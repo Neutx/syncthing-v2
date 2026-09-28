@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [1.0.0] - Unreleased
+## [1.0.0] - 2026-09-29
 
 The first public release. SyncThing V2 replaces its own earlier Windows-only C# prototype (not the Syncthing Tray project by Martchus, which is left alone), a WinForms tray with a "Liquid Glass" dashboard. It keeps every prototype feature, and runs on Windows, macOS and Linux.
 
