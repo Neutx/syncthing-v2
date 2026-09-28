@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"image/png"
@@ -101,6 +102,7 @@ func testRoots(t *testing.T, root string) Roots {
 			UninstallKey:        base + `\Uninstall\SyncThingV2`,
 			StartMenuDir:        filepath.Join(root, "StartMenu", "Programs"),
 			StartupDir:          startup,
+			LegacyExe:           filepath.Join(root, "Local", "Programs", "Syncthing", "tray", "SyncthingTray.exe"),
 		}
 	case "darwin":
 		data := filepath.Join(root, "Library", "Application Support", "SyncThingV2")
@@ -480,8 +482,18 @@ func TestUninstallSelfDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `ping -n 3 127.0.0.1 >nul & rmdir /s /q "` + r.InstallDir + `"`
-	if len(rc.scripts) != 1 || rc.scripts[0] != want {
+	// ping runs by its full path in the system directory, never by a bare
+	// name cmd.exe would first look up in its current directory.
+	if len(rc.scripts) != 1 {
+		t.Fatalf("scripts = %q, want one", rc.scripts)
+	}
+	ping, _, _ := strings.Cut(rc.scripts[0], " -n 3 ")
+	sysPing := strings.Trim(ping, `"`)
+	if ping != `"`+sysPing+`"` || !filepath.IsAbs(sysPing) || !strings.EqualFold(filepath.Base(sysPing), "PING.EXE") || !isRegular(sysPing) {
+		t.Fatalf("script does not start with the quoted system PING.EXE: %q", rc.scripts[0])
+	}
+	want := ping + ` -n 3 127.0.0.1 >nul & rmdir /s /q "` + r.InstallDir + `"`
+	if rc.scripts[0] != want {
 		t.Fatalf("scripts = %q, want %q", rc.scripts, want)
 	}
 	if len(res.Notes) == 0 || !exists(exe) {
@@ -503,7 +515,7 @@ func TestUninstallSelfDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = `ping -n 3 127.0.0.1 >nul & rmdir /s /q "` + r.DataDir + `"`
+	want = ping + ` -n 3 127.0.0.1 >nul & rmdir /s /q "` + r.DataDir + `"`
 	if len(rc.scripts) != 1 || rc.scripts[0] != want {
 		t.Fatalf("scripts = %q, want %q", rc.scripts, want)
 	}
@@ -520,7 +532,7 @@ func TestUninstallSelfDelete(t *testing.T) {
 	if _, err := Uninstall(ctx, r, Options{Yes: true, Self: exe}); err != nil {
 		t.Fatal(err)
 	}
-	want = `ping -n 3 127.0.0.1 >nul & del /f /q "` + exe + `" "` + exe + `.old" 2>nul`
+	want = ping + ` -n 3 127.0.0.1 >nul & del /f /q "` + exe + `" "` + exe + `.old" 2>nul`
 	if len(rc.scripts) != 1 || rc.scripts[0] != want {
 		t.Fatalf("scripts = %q, want %q", rc.scripts, want)
 	}
@@ -585,15 +597,43 @@ func TestPackagedLinuxBinaryIsUsedInPlace(t *testing.T) {
 	}
 }
 
+// ansiLnk is a minimal shell link whose LinkInfo LocalBasePath is target.
+func ansiLnk(target string) []byte {
+	le := binary.LittleEndian
+	header := make([]byte, 0x4C)
+	le.PutUint32(header, 0x4C)
+	le.PutUint32(header[0x14:], 1<<1) // HasLinkInfo
+	path := append([]byte(target), 0)
+	info := make([]byte, 0x1C)
+	le.PutUint32(info, uint32(0x1C+len(path)+1)) // LinkInfoSize
+	le.PutUint32(info[4:], 0x1C)                 // LinkInfoHeaderSize
+	le.PutUint32(info[8:], 1)                    // VolumeIDAndLocalBasePath
+	le.PutUint32(info[0x10:], 0x1C)              // LocalBasePathOffset
+	le.PutUint32(info[0x18:], uint32(0x1C+len(path)))
+	return slices.Concat(header, info, path, []byte{0})
+}
+
 func TestLegacyMigration(t *testing.T) {
-	startup := t.TempDir()
+	root := t.TempDir()
+	legacyExe := filepath.Join(root, "Programs", "Syncthing", "tray", "SyncthingTray.exe")
+	// The unrelated Syncthing Tray project (Martchus) uses syncthingtray.exe.
+	otherExe := filepath.Join(root, "Programs", "Syncthing Tray", "syncthingtray.exe")
+	startup := filepath.Join(root, "Startup")
 	lnk := filepath.Join(startup, "Syncthing Tray.lnk")
-	writeFile(t, lnk, "synthetic shell link")
+	lnkData := string(ansiLnk(legacyExe))
+	writeFile(t, lnk, lnkData)
 	writeFile(t, filepath.Join(startup, "Syncthing.lnk"), "syncthing autostart, not ours")
 	procs := func() ([]Process, error) {
-		return []Process{{PID: 4242, Name: "SyncthingTray.exe"}, {PID: 7, Name: "explorer.exe"}, {PID: 4243, Name: "syncthingtray.EXE"}}, nil
+		return []Process{
+			{PID: 4242, Name: "SyncthingTray.exe", Path: legacyExe},
+			{PID: 7, Name: "explorer.exe", Path: `C:\Windows\explorer.exe`},
+			{PID: 4243, Name: "SyncthingTray.exe", Path: legacyExe},
+			{PID: 5000, Name: "syncthingtray.exe", Path: otherExe},
+			{PID: 5001, Name: "SyncthingTray.exe"}, // path unreadable
+		}, nil
 	}
-	l := detectLegacy(startup, procs)
+	r := Roots{StartupDir: startup, LegacyExe: legacyExe, Processes: procs}
+	l := detectLegacy(r)
 	if l.Shortcut != lnk || !slices.Equal(l.PIDs, []int{4242, 4243}) || !l.Found() {
 		t.Fatalf("detectLegacy = %+v", l)
 	}
@@ -604,17 +644,38 @@ func TestLegacyMigration(t *testing.T) {
 	if !slices.Equal(killed, []int{4242, 4243}) {
 		t.Errorf("terminated %v", killed)
 	}
-	if exists(lnk) || readFile(t, lnk+".disabled") != "synthetic shell link" {
+	if exists(lnk) || readFile(t, lnk+".disabled") != lnkData {
 		t.Error("shortcut not renamed to .lnk.disabled")
 	}
 	if readFile(t, filepath.Join(startup, "Syncthing.lnk")) != "syncthing autostart, not ours" {
 		t.Error("Syncthing.lnk was touched")
 	}
-	if l := detectLegacy(startup, func() ([]Process, error) { return nil, nil }); l.Found() {
+	r.Processes = func() ([]Process, error) { return nil, nil }
+	if l := detectLegacy(r); l.Found() {
 		t.Errorf("legacy still detected after migration: %+v", l)
 	}
-	if l := detectLegacy("", nil); l.Found() {
+	if l := detectLegacy(Roots{}); l.Found() {
 		t.Error("detected legacy without any source")
+	}
+
+	// Only the prototype counts: the Syncthing Tray project's process and a
+	// same-named Startup shortcut pointing elsewhere (or not a shell link)
+	// are left alone.
+	for _, data := range []string{string(ansiLnk(otherExe)), "synthetic text, not a shell link"} {
+		writeFile(t, lnk, data)
+		r.Processes = func() ([]Process, error) {
+			return []Process{{PID: 5000, Name: "syncthingtray.exe", Path: otherExe}, {PID: 5002, Name: "SyncthingTray.exe", Path: otherExe}}, nil
+		}
+		if l := detectLegacy(r); l.Found() {
+			t.Errorf("the Syncthing Tray project was taken for the legacy tray: %+v", l)
+		}
+	}
+	// Without a known prototype location nothing is detected at all.
+	writeFile(t, lnk, lnkData)
+	r.LegacyExe = ""
+	r.Processes = procs
+	if l := detectLegacy(r); l.Found() {
+		t.Errorf("detected legacy without LegacyExe: %+v", l)
 	}
 	err := migrateLegacy(Legacy{PIDs: []int{1}}, func(int) error { return errors.New("denied") })
 	if err == nil || !strings.Contains(err.Error(), "denied") {
@@ -627,10 +688,11 @@ func TestInstallMigratesLegacyOnConsent(t *testing.T) {
 		t.Skip("the legacy prototype tray existed on Windows only")
 	}
 	root := t.TempDir()
-	rc := &recorder{procs: []Process{{PID: 4242, Name: "SyncthingTray.exe"}}}
-	r := rc.roots(testRoots(t, root))
+	r := testRoots(t, root)
+	rc := &recorder{procs: []Process{{PID: 4242, Name: "SyncthingTray.exe", Path: r.LegacyExe}}}
+	r = rc.roots(r)
 	lnk := filepath.Join(r.StartupDir, "Syncthing Tray.lnk")
-	writeFile(t, lnk, "synthetic shell link")
+	writeFile(t, lnk, string(ansiLnk(r.LegacyExe)))
 	self := filepath.Join(root, "elsewhere", "stv2.exe")
 	src := fakeSource(t, root, "stv2")
 
@@ -882,13 +944,15 @@ func TestStopRunningSkipsMissingInstance(t *testing.T) {
 	}
 }
 
-// TestSelfDeleteCommandLine pins the cmd.exe switches: /d (no AutoRun) and
-// /v:off (no delayed expansion, whatever the DelayedExpansion policy says).
-// On Windows it also shows why /v:off matters: with delayed expansion on,
-// cmd.exe expands !VAR!, which quoting does not prevent.
+// TestSelfDeleteCommandLine pins the cmd.exe switches: /d (no AutoRun),
+// /v:off (no delayed expansion, whatever the DelayedExpansion policy says)
+// and /s with one outer pair of quotes (so a script starting with a quoted
+// program path keeps its quotes). On Windows it also shows why /v:off
+// matters: with delayed expansion on, cmd.exe expands !VAR!, which quoting
+// does not prevent.
 func TestSelfDeleteCommandLine(t *testing.T) {
-	const script = `ping -n 3 127.0.0.1 >nul & rmdir /s /q "C:\a!b!c"`
-	want := `"C:\Windows\system32\cmd.exe" /d /v:off /c ` + script
+	const script = `"C:\Windows\system32\PING.EXE" -n 3 127.0.0.1 >nul & rmdir /s /q "C:\a!b!c"`
+	want := `"C:\Windows\system32\cmd.exe" /d /v:off /s /c "` + script + `"`
 	if got := selfDeleteCommandLine(`C:\Windows\system32\cmd.exe`, script); got != want {
 		t.Fatalf("command line = %q, want %q", got, want)
 	}
@@ -921,7 +985,8 @@ func TestSelfDeleteRuns(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "Program Files & Co !OS!", "SyncThingV2")
 	writeFile(t, filepath.Join(dir, "stv2.exe"), "fake")
 	writeFile(t, filepath.Join(dir, "sub", "file.txt"), "fake")
-	if err := selfDelete(`ping -n 2 127.0.0.1 >nul & rmdir /s /q "` + dir + `"`); err != nil {
+	ping := filepath.Join(os.Getenv("SystemRoot"), "System32", "PING.EXE")
+	if err := selfDelete(`"` + ping + `" -n 2 127.0.0.1 >nul & rmdir /s /q "` + dir + `"`); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(15 * time.Second)
@@ -933,5 +998,23 @@ func TestSelfDeleteRuns(t *testing.T) {
 	}
 	if !exists(filepath.Dir(dir)) {
 		t.Fatal("the script removed more than the named directory")
+	}
+}
+
+func TestCheckLoginPath(t *testing.T) {
+	for _, c := range []struct {
+		exe string
+		ok  bool
+	}{
+		{"/Applications/SyncThing V2.app/Contents/MacOS/stv2", true},
+		{"/Users/example/Applications/SyncThing V2.app/Contents/MacOS/stv2", true},
+		{"/Users/example/Library/Application Support/SyncThingV2/bin/stv2", true},
+		{"/Volumes/SyncThing V2/SyncThing V2.app/Contents/MacOS/stv2", false},
+		{"/private/var/folders/xy/abc/T/AppTranslocation/0A1B2C3D/d/SyncThing V2.app/Contents/MacOS/stv2", false},
+		{"/Applications/../Volumes/Image/SyncThing V2.app/Contents/MacOS/stv2", false},
+	} {
+		if err := CheckLoginPath(c.exe); (err == nil) != c.ok {
+			t.Errorf("CheckLoginPath(%q) = %v, want ok %v", c.exe, err, c.ok)
+		}
 	}
 }

@@ -3,15 +3,19 @@ package status
 import (
 	"fmt"
 	"net/netip"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Neutx/syncthing-v2/internal/applog"
 	"github.com/Neutx/syncthing-v2/internal/brand"
 	"github.com/Neutx/syncthing-v2/internal/model"
+	"github.com/Neutx/syncthing-v2/internal/osutil"
 )
 
 // Diagnostics renders a plain-text status report for "Copy diagnostics"
@@ -139,30 +143,105 @@ func Short(id string) string {
 
 var (
 	deviceIDRe = regexp.MustCompile(`\b[A-Z2-7]{7}(?:-[A-Z2-7]{7}){7}\b|\b[A-Z2-7]{52,56}\b`)
-	winPathRe  = regexp.MustCompile(`\b[A-Za-z]:[\\/][^\s"'<>|,;]*|\\\\[^\s"'<>|,;]+`)
-	unixPathRe = regexp.MustCompile(`(^|[\s"'=(:,\[])(~?/[^/\s"'<>,;)\]][^\s"'<>,;)\]]*)`)
+	// Paths may contain spaces, so an unquoted path runs to the next ": "
+	// separator (as in Go's "open <path>: <reason>" errors), a quote or the
+	// end of the line. A path inside double quotes is replaced whole first.
+	winPathRe  = regexp.MustCompile(`\b[A-Za-z]:[\\/](?:[^"<>|\r\n:]|:\S)*|\\\\[^\s"<>|](?:[^"<>|\r\n:]|:\S)*`)
+	unixPathRe = regexp.MustCompile(`(^|[\s"'=(:,\[])(~?/[^/\s"'<>,;)\]](?:[^"<>\r\n:]|:\S)*)`)
+	quotedRe   = regexp.MustCompile(`"[^"\r\n]*"`)
 	ipv4Re     = regexp.MustCompile(`\b\d{1,3}(?:\.\d{1,3}){3}\b`)
 	ipv6Re     = regexp.MustCompile(`\[?[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:%[0-9A-Za-z_.\-]+)?\]?`)
 	keptPrefix = netip.MustParsePrefix("100.64.0.0/10")
 )
 
+// homeDir is the user's home directory, whose path and final element (the
+// account name, often the user's real name) are removed from diagnostics as
+// a second line of defence behind the path patterns. A variable for tests.
+var homeDir = osutil.HomeDir
+
 // RedactText removes secrets and identifying data from free text: registered
 // secrets and API key patterns, full device IDs (cut to 7 characters), file
-// system paths, and IP addresses other than loopback and 100.64.0.0/10.
+// system paths (including the rest of a path after a space), the home
+// directory and account name, and IP addresses other than loopback and
+// 100.64.0.0/10.
 func RedactText(s string) string {
 	s = applog.Redact(s)
 	s = deviceIDRe.ReplaceAllStringFunc(s, func(id string) string { return id[:7] })
+	s = quotedRe.ReplaceAllStringFunc(s, func(q string) string {
+		if hasPath(q[1 : len(q)-1]) {
+			return `"<path>"`
+		}
+		return q
+	})
 	s = winPathRe.ReplaceAllString(s, "<path>")
-	s = unixPathRe.ReplaceAllStringFunc(s, func(m string) string {
+	s = redactUnixPaths(s)
+	s = redactHome(s)
+	s = ipv4Re.ReplaceAllStringFunc(s, redactIP)
+	s = ipv6Re.ReplaceAllStringFunc(s, redactIP)
+	return s
+}
+
+// hasPath reports whether s contains a Windows, UNC or Unix path (a Syncthing
+// REST endpoint such as /rest/db/status does not count).
+func hasPath(s string) bool {
+	return winPathRe.MatchString(s) || redactUnixPaths(s) != s
+}
+
+// redactUnixPaths replaces Unix and home-relative paths with <path>. A
+// Syncthing REST endpoint (/rest/...) is kept, up to its first space, and
+// the text after it is scanned again.
+func redactUnixPaths(s string) string {
+	return unixPathRe.ReplaceAllStringFunc(s, func(m string) string {
 		sub := unixPathRe.FindStringSubmatch(m)
 		if strings.HasPrefix(sub[2], "/rest/") {
+			if i := strings.IndexAny(sub[2], " \t"); i >= 0 {
+				return sub[1] + sub[2][:i] + redactUnixPaths(sub[2][i:])
+			}
 			return m
 		}
 		return sub[1] + "<path>"
 	})
-	s = ipv4Re.ReplaceAllStringFunc(s, redactIP)
-	s = ipv6Re.ReplaceAllStringFunc(s, redactIP)
-	return s
+}
+
+// redactHome removes any remaining occurrence of the home directory and, as
+// a whole word in any letter case, the account name it ends in.
+func redactHome(s string) string {
+	home, err := homeDir()
+	if err != nil || home == "" {
+		return s
+	}
+	for _, h := range []string{home, filepath.ToSlash(home)} {
+		s = strings.ReplaceAll(s, h, "<path>")
+	}
+	user := filepath.Base(home)
+	if len(user) < 2 || user == "." || user == string(filepath.Separator) {
+		return s
+	}
+	re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(user))
+	var b strings.Builder
+	last := 0
+	for _, m := range re.FindAllStringIndex(s, -1) {
+		if wordRune(s[:m[0]], true) || wordRune(s[m[1]:], false) {
+			continue // part of a longer word
+		}
+		b.WriteString(s[last:m[0]])
+		b.WriteString("<user>")
+		last = m[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+// wordRune reports whether the rune at the end (before) or start (!before)
+// of s is a letter, digit or underscore.
+func wordRune(s string, before bool) bool {
+	var r rune
+	if before {
+		r, _ = utf8.DecodeLastRuneInString(s)
+	} else {
+		r, _ = utf8.DecodeRuneInString(s)
+	}
+	return r != utf8.RuneError && (r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r))
 }
 
 func redactIP(m string) string {
@@ -192,11 +271,29 @@ func redactAddr(addr string) string {
 	return "<ip>"
 }
 
-// redactActivity hides the file names in Recent Activity lines.
+// activityRedactions maps the prefixes of Recent Activity lines that end in
+// a file name, device or host name, or folder label to the placeholder that
+// replaces the rest of the line.
+var activityRedactions = []struct{ prefix, placeholder string }{
+	{"Received ", "<file>"},
+	{"Updated ", "<file>"},
+	{"Deleted ", "<file>"},
+	{"Failed: ", "<file>"},
+	{"Local change: ", "<file>"},
+	{"Remote change: ", "<file>"},
+	{"Pairing requested: ", "<name>"},
+	{"Paired with ", "<name>"},
+	{"Shared ", "<name>"},
+	{"Accepted ", "<name>"},
+	{"Declined ", "<name>"},
+}
+
+// redactActivity hides the file names, device names and folder labels in
+// Recent Activity lines.
 func redactActivity(text string) string {
-	for _, p := range []string{"Received ", "Updated ", "Deleted ", "Failed: ", "Local change: ", "Remote change: "} {
-		if strings.HasPrefix(text, p) {
-			return p + "<file>"
+	for _, r := range activityRedactions {
+		if strings.HasPrefix(text, r.prefix) {
+			return r.prefix + r.placeholder
 		}
 	}
 	return RedactText(text)

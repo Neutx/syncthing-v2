@@ -74,6 +74,26 @@ func Place(sizeDIP image.Point) (image.Rectangle, float64) {
 	return placeRect(mi.Monitor.image(), mi.Work.image(), dpiX, sizeDIP)
 }
 
+// placedCorner returns the corner (see trayCorner) of the dashboard placed at
+// r by Place: the one nearest the tray on r's monitor.
+func placedCorner(r image.Rectangle) string {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer withPerMonitorDPI()()
+
+	probe := rect{int32(r.Min.X), int32(r.Min.Y), int32(r.Max.X), int32(r.Max.Y)}
+	mon, _, _ := procMonitorFromRect.Call(uintptr(unsafe.Pointer(&probe)), monitorDefaultToNearest)
+	mi := monitorInfo{}
+	mi.Size = uint32(unsafe.Sizeof(mi))
+	if mon == 0 {
+		return "br"
+	}
+	if ok, _, _ := procGetMonitorInfoW.Call(mon, uintptr(unsafe.Pointer(&mi))); ok == 0 {
+		return "br"
+	}
+	return trayCorner(mi.Monitor.image(), mi.Work.image())
+}
+
 // withPerMonitorDPI makes the calling (locked) thread per-monitor DPI aware,
 // so coordinates are physical pixels whatever the process manifest says, and
 // returns a function restoring the previous context.

@@ -98,8 +98,8 @@ func truncateUTF16(s string, max int) string {
 // s must be a snapshot the app has built (s.At is set). The zero Snapshot has
 // State == StateDown, so building a menu from it would offer "Start
 // Syncthing" before anything is known. Until the first SetMenu and SetIcon the
-// tray has no menu and shows the app icon (icon.AppState) with a "starting"
-// tooltip, so callers wait for the first snapshot instead.
+// tray has no menu and shows the neutral icon (icon.PendingState) with a
+// "starting" tooltip, so callers wait until the state is known instead.
 func BuildMenu(s model.Snapshot) []MenuItem { return buildMenu(s, brand.AtLogin()) }
 
 func buildMenu(s model.Snapshot, atLogin string) []MenuItem {

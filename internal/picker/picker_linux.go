@@ -16,8 +16,8 @@ import (
 )
 
 // folder runs zenity or kdialog, whichever is installed (kdialog first on
-// KDE Plasma). Without either it returns "" and the caller falls back to a
-// typed path.
+// KDE Plasma). Without either it returns ErrUnavailable, and the dashboard
+// asks for a typed path instead.
 func folder(title, initial string) (string, error) {
 	type tool struct {
 		name string
@@ -37,7 +37,7 @@ func folder(title, initial string) (string, error) {
 		}
 		return run(bin, t.args)
 	}
-	return "", nil
+	return "", ErrUnavailable
 }
 
 // run executes a picker. Both zenity and kdialog exit with status 1 on cancel.

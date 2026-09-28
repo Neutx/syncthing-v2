@@ -21,7 +21,7 @@ The script (`install.sh`, published with each release):
 3. checks the SHA-256 with `sha256sum -c`, and stops without installing anything if it does not match
 4. runs `./stv2 install --yes` from the archive, which installs SyncThing V2 for you and starts it
 
-It never runs `sudo` and refuses to run as root. It needs `curl` or `wget`, `tar` and `sha256sum`. To install a specific release, run `curl -fsSL … | STV2_VERSION=1.0.0 sh`.
+It never runs `sudo` and refuses to run as root; `stv2` itself also refuses to install or run as root unless `STV2_ALLOW_ROOT=1` is set (the script's `--allow-root` sets it). It needs `curl` or `wget`, `tar` and `sha256sum`. To install a specific release, run `curl -fsSL https://github.com/Neutx/syncthing-v2/releases/latest/download/install.sh | STV2_VERSION=1.0.0 sh`.
 
 ## Option 2: the .deb package (Debian, Ubuntu and derivatives)
 
@@ -48,8 +48,9 @@ The archive contains `stv2`, `LICENSE` and `THIRD_PARTY_NOTICES.md`. You can del
 
 SyncThing V2 opens its dashboard in your browser and runs the first-time setup:
 
-- **Syncthing.** A running Syncthing, or one installed from your distribution, Snap or `~/.local/bin`, is found and used as it is. If there is none, SyncThing V2 downloads the pinned upstream release, checks its SHA-256, and sets it up with the tailnet-only transport profile. It starts Syncthing at login (see below).
+- **Syncthing.** A running Syncthing, or one installed from your distribution, Snap (run through `/snap/bin/syncthing`), Homebrew on Linux, Nix, `/usr/local/bin` or `~/.local/bin`, is found and used as it is. If there is none, SyncThing V2 downloads the pinned upstream release, checks its SHA-256, and sets it up with the tailnet-only transport profile. It starts Syncthing at login (see below).
 - **Tailscale.** If the `tailscale` command cannot be found in `/usr/bin`, `/usr/local/bin`, `/snap/bin` or on your `PATH`, the dashboard shows a notice.
+- **Choosing a folder.** Choosing a folder (to share a new one, or where to save one that is offered to you) uses zenity or kdialog when one is installed (for example `sudo apt install zenity`). Without either, the dashboard asks you to type the folder's full path.
 
 Then open **Pair devices**. [pairing.md](pairing.md) walks through it.
 
@@ -59,18 +60,18 @@ Then open **Pair devices**. [pairing.md](pairing.md) walks through it.
 
 GNOME Shell shows no tray icons by default. Install the **AppIndicator and KStatusNotifierItem Support** extension. Ubuntu ships it preinstalled as "Ubuntu AppIndicators". On other distributions it is usually packaged as `gnome-shell-extension-appindicator`, or you can get it from [extensions.gnome.org](https://extensions.gnome.org/extension/615/appindicator-support/). Log out and back in after enabling it.
 
-Without a tray host, SyncThing V2 sends a notification saying so, opens its dashboard in the browser instead, and `stv2 doctor` reports [UI002](troubleshooting.md#ui002). KDE Plasma, Xfce, Cinnamon, MATE and most other desktops show the icon without extra steps.
+Without a tray host (SyncThing V2 waits up to 30 seconds at login for the panel to provide one), SyncThing V2 sends a notification saying so, opens its dashboard in the browser instead, and `stv2 doctor` reports [UI002](troubleshooting.md#ui002). KDE Plasma, Xfce, Cinnamon, MATE and most other desktops show the icon without extra steps.
 
 ## Starting at login
 
 | What | How |
 |---|---|
 | SyncThing V2 | `~/.config/autostart/stv2.desktop` (`stv2 --background`) |
-| Syncthing from your distribution (it ships `syncthing.service` as a user unit) | `systemctl --user enable --now syncthing.service` |
+| Syncthing from your distribution (it ships `syncthing.service` as a user unit) | `systemctl --user enable syncthing.service` (it takes over from the next login) |
 | Syncthing that SyncThing V2 downloaded | the user unit `~/.config/systemd/user/stv2-syncthing.service`, using upstream's restart rules |
 | Either one, when `systemctl --user` is not available | `~/.config/autostart/stv2-syncthing.desktop` |
 
-A Syncthing autostart that you set up yourself (another user unit or autostart entry) is detected and left alone. The "Start Syncthing on login" toggle is then shown read-only. Check the unit with `systemctl --user status stv2-syncthing.service`, or `syncthing.service` for a distribution package.
+A Syncthing autostart that you set up yourself (any other user unit or autostart entry whose program is `syncthing`, such as `homebrew.syncthing.service`) is detected and left alone. The "Start Syncthing on login" toggle is then shown read-only. Check the unit with `systemctl --user status stv2-syncthing.service`, or `syncthing.service` for a distribution package.
 
 ## What is installed where
 
@@ -93,7 +94,7 @@ With `ufw`, allow Syncthing's port on the Tailscale interface only:
 sudo ufw allow in on tailscale0 to any port 22000
 ```
 
-Pairing and sync need only one of the two computers to accept incoming connections, so this is optional when the other computer accepts them.
+Do this whenever your firewall blocks incoming connections: pairing through SyncThing V2 needs both computers to accept connections on port 22000. The computer where you click **Accept** checks the computer where you clicked **Pair** on that port before it shows the request. If the port is blocked on the Pair side, the request never appears (see [pairing.md](pairing.md)). With firewalld, add port 22000/tcp and 22000/udp to the zone of the `tailscale0` interface.
 
 ## Upgrading
 

@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/Neutx/syncthing-v2/internal/deviceid"
 	"github.com/Neutx/syncthing-v2/internal/install"
 	"github.com/Neutx/syncthing-v2/internal/model"
+	"github.com/Neutx/syncthing-v2/internal/picker"
 	"github.com/Neutx/syncthing-v2/internal/prefs"
 	"github.com/Neutx/syncthing-v2/internal/stclient"
 	"github.com/Neutx/syncthing-v2/internal/stinstall"
@@ -32,7 +34,7 @@ import (
 
 // ---------- a fake Syncthing REST API (synthetic data only) ----------
 
-const testAPIKey = "synthetic-api-key-0123456789"
+const testAPIKey = "synthetic-api-key-0123456789" // gitleaks:allow (synthetic test value)
 
 type fakeST struct {
 	t   *testing.T
@@ -322,6 +324,7 @@ type fakeAuto struct {
 	mu      sync.Mutex
 	on      map[autostart.Target]bool
 	foreign bool
+	loaded  bool // launchd has our job loaded while its entry is on
 	sets    []string
 }
 
@@ -335,6 +338,11 @@ func (f *fakeAuto) Existing(t autostart.Target) (string, bool) {
 		return "Startup folder shortcut", true
 	}
 	return "", false
+}
+func (f *fakeAuto) Loaded(t autostart.Target) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.loaded && f.on[t]
 }
 func (f *fakeAuto) Set(t autostart.Target, on bool, bin string, args []string) error {
 	f.mu.Lock()
@@ -862,6 +870,7 @@ func TestAutostartOffRestartsSyncthing(t *testing.T) {
 	for _, stops := range []bool{true, false} {
 		autostartOffStopsSyncthing = stops
 		h := newHarness(t, nil, stclient.GUIConfig{})
+		h.auto.loaded = true
 		bin := filepath.Join(t.TempDir(), "syncthing")
 		var started []string
 		h.a.startST = func(b string) error { started = append(started, b); return nil }
@@ -894,15 +903,77 @@ func TestAutostartOffRestartsSyncthing(t *testing.T) {
 		}
 	}
 
-	// A failed restart is reported.
+	// Our entry was written this session for a Syncthing started detached,
+	// so launchd never loaded it: turning it off stops nothing, and starting
+	// Syncthing again would run a second instance on the same home.
 	autostartOffStopsSyncthing = true
 	h := newHarness(t, nil, stclient.GUIConfig{})
+	var started []string
+	h.a.startST = func(b string) error { started = append(started, b); return nil }
+	h.a.mu.Lock()
+	h.a.inst, h.a.instFound = stinstall.Install{Bin: filepath.Join(t.TempDir(), "syncthing")}, true
+	h.a.mu.Unlock()
+	h.auto.on[autostart.Syncthing] = true
+	if err := h.a.setAutostart("syncthing", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(started) != 0 || h.auto.on[autostart.Syncthing] {
+		t.Errorf("job not loaded: started %q, entry on %v; want no restart and the entry off", started, h.auto.on[autostart.Syncthing])
+	}
+
+	// A failed restart is reported.
+	h = newHarness(t, nil, stclient.GUIConfig{})
+	h.auto.loaded = true
 	h.a.mu.Lock()
 	h.a.inst, h.a.instFound = stinstall.Install{Bin: filepath.Join(t.TempDir(), "syncthing")}, true
 	h.a.mu.Unlock()
 	h.auto.on[autostart.Syncthing] = true
 	if err := h.a.setAutostart("syncthing", false); err == nil || !strings.Contains(err.Error(), "restarting Syncthing") {
 		t.Errorf("failed restart: err = %v", err)
+	}
+}
+
+// On macOS a Syncthing run from inside Syncthing.app is started at login by
+// that app's own login item: the toggle shows it as configured outside
+// SyncThing V2 and adds no LaunchAgent, which would start a second one.
+func TestSyncthingAppManagesAutostart(t *testing.T) {
+	saved := goos
+	t.Cleanup(func() { goos = saved })
+	goos = "darwin"
+	h := newHarness(t, nil, stclient.GUIConfig{})
+	h.a.mu.Lock()
+	h.a.setInstLocked(stinstall.Install{Bin: "/Applications/Syncthing.app/Contents/Resources/syncthing/syncthing"})
+	h.a.mu.Unlock()
+	if desc, ok := h.a.autoExisting(autostart.Syncthing); !ok || desc != "Syncthing.app manages Syncthing" {
+		t.Errorf("autoExisting = %q, %v", desc, ok)
+	}
+	if st := h.a.startupCached(); !st.Syncthing || st.SyncthingManagedByUs {
+		t.Errorf("startup = %+v, want Syncthing on and not managed by us", st)
+	}
+	err := h.a.setAutostart("syncthing", true)
+	var ue userError
+	if !errors.As(err, &ue) || err.Error() != autostart.ExternalText {
+		t.Errorf("setAutostart = %v, want the read-only notice", err)
+	}
+	if len(h.auto.sets) != 0 {
+		t.Errorf("autostart entries written: %q", h.auto.sets)
+	}
+
+	// A Homebrew or managed Syncthing is not taken for an app's.
+	h = newHarness(t, nil, stclient.GUIConfig{})
+	h.a.mu.Lock()
+	h.a.setInstLocked(stinstall.Install{Bin: "/opt/homebrew/bin/syncthing"})
+	h.a.mu.Unlock()
+	if desc, ok := h.a.autoExisting(autostart.Syncthing); ok {
+		t.Errorf("autoExisting(homebrew) = %q", desc)
+	}
+	// Other systems never look at app bundles.
+	goos = "linux"
+	h.a.mu.Lock()
+	h.a.setInstLocked(stinstall.Install{Bin: "/Applications/Syncthing.app/Contents/Resources/syncthing/syncthing"})
+	h.a.mu.Unlock()
+	if desc, ok := h.a.autoExisting(autostart.Syncthing); ok {
+		t.Errorf("autoExisting on linux = %q", desc)
 	}
 }
 
@@ -1032,6 +1103,62 @@ func TestExpandHome(t *testing.T) {
 
 // ---------- views, connect serialisation and the firewall rule ----------
 
+// TestNoTrayHostWaits: at login the tray host (StatusNotifierWatcher) often
+// appears a moment after the tray starts. The UI002 notice and the browser
+// fallback fire only if it is still missing after the wait.
+func TestNoTrayHostWaits(t *testing.T) {
+	shows := func(h *harness) int { return len(h.host.shownViews()) }
+
+	// The watcher appears during the wait: no notice, no dashboard.
+	h := newHarness(t, nil, stclient.GUIConfig{})
+	var polls atomic.Int32
+	h.a.hasSNI = func() bool { return polls.Add(1) > 3 }
+	h.a.sniWait, h.a.sniPoll = 5*time.Second, 5*time.Millisecond
+	h.a.opts = Options{Background: true}
+	h.a.openOnStart()
+	waitFor(t, "the watcher polls", func() bool { return polls.Load() > 3 })
+	h.a.Quit()
+	h.a.wg.Wait()
+	if n := len(h.notifications()); n != 0 {
+		t.Errorf("%d notifications although the tray host appeared: %+v", n, h.notifications())
+	}
+	if n := shows(h); n != 0 {
+		t.Errorf("background start opened the dashboard %d times although the tray host appeared", n)
+	}
+
+	// The watcher never appears: the notice, then the dashboard.
+	h = newHarness(t, nil, stclient.GUIConfig{})
+	h.a.hasSNI = func() bool { return false }
+	h.a.sniWait, h.a.sniPoll = 60*time.Millisecond, 10*time.Millisecond
+	h.a.opts = Options{Background: true}
+	start := time.Now()
+	h.a.openOnStart()
+	if len(h.notifications()) != 0 || shows(h) != 0 {
+		t.Fatal("the UI002 fallback fired before waiting for the tray host")
+	}
+	waitFor(t, "the UI002 fallback", func() bool { return shows(h) == 1 })
+	if d := time.Since(start); d < 60*time.Millisecond {
+		t.Errorf("fallback after %v, want at least the 60 ms wait", d)
+	}
+	if notes := h.notifications(); len(notes) != 1 || notes[0].title != "No tray icon available" {
+		t.Errorf("notifications = %+v, want the UI002 notice", notes)
+	}
+
+	// Outside the autostart mode the dashboard opens at once; only the
+	// notice waits.
+	h = newHarness(t, nil, stclient.GUIConfig{})
+	h.a.hasSNI = func() bool { return false }
+	h.a.sniWait, h.a.sniPoll = time.Hour, time.Hour
+	h.a.opts = Options{}
+	h.a.openOnStart()
+	waitFor(t, "the dashboard", func() bool { return shows(h) == 1 })
+	h.a.Quit()
+	h.a.wg.Wait()
+	if n := len(h.notifications()); n != 0 {
+		t.Errorf("%d notifications after quitting during the wait", n)
+	}
+}
+
 // TestShowViews: "Pair Devices…" and the pairing and folder-offer
 // notifications open the Pair view, --setup opens the welcome view, and
 // "Open Status Window" keeps the page on its view.
@@ -1081,8 +1208,19 @@ func TestShowViews(t *testing.T) {
 	if n := len(h.host.shownViews()); n != 1 {
 		t.Errorf("background start opened the dashboard (%d shows)", n)
 	}
+	// Without a native message box, "About" opens the Settings view, which
+	// carries the About section.
+	h.host.mu.Lock()
+	h.host.views = nil
+	h.host.mu.Unlock()
+	h.a.opts = Options{}
+	h.a.handleMenu(tray.IDAbout)
+	waitFor(t, "the about view", func() bool { return len(h.host.shownViews()) == 1 })
+	if v := h.host.shownViews()[0]; v != ViewSettings {
+		t.Errorf("About opened view %q, want %q", v, ViewSettings)
+	}
 	// The views the app opens are names the host accepts.
-	for _, v := range []string{ViewPair, ViewWelcome} {
+	for _, v := range []string{ViewPair, ViewWelcome, ViewSettings} {
 		if !uihost.ValidView(v) {
 			t.Errorf("view %q is not a valid uihost view", v)
 		}
@@ -1164,5 +1302,148 @@ func TestAllowFirewall(t *testing.T) {
 	h.a.allowFW = func(context.Context, string) error { return install.ErrFirewallUnsupported }
 	if _, err := act(t, h.a, "allow-firewall", nil); !errors.Is(err, install.ErrFirewallUnsupported) {
 		t.Errorf("unsupported OS: %v", err)
+	}
+}
+
+// Until the first look for Syncthing has finished, the tray keeps its
+// neutral "starting" look and offers no Start action, and the dashboard says
+// it is connecting instead of "Not running".
+func TestTrayWaitsForFirstLook(t *testing.T) {
+	h := newHarness(t, nil, stclient.GUIConfig{})
+	h.a.publish()
+	s := h.a.lastSnapshot()
+	if !s.Connecting || s.Headline != "Connecting" || s.Detail != "Looking for Syncthing…" {
+		t.Errorf("snapshot before the first look = %+v", s)
+	}
+	h.tray.mu.Lock()
+	icons, menu, tip := len(h.tray.icons), h.tray.menu, h.tray.tooltip
+	h.tray.mu.Unlock()
+	if icons != 0 || menu != nil || tip != "" {
+		t.Errorf("tray updated before the state was known: icons %d, menu %v, tooltip %q", icons, menu, tip)
+	}
+
+	h.a.connect(context.Background())
+	s = h.a.lastSnapshot()
+	if s.Connecting || s.State != model.StateDown || !strings.Contains(s.Detail, "not found") {
+		t.Errorf("snapshot after the first look = %+v", s)
+	}
+	_, menu, _ = h.tray.state()
+	if !slices.ContainsFunc(menu, func(m tray.MenuItem) bool { return m.ID == tray.IDStartSyncthing && m.Visible }) {
+		t.Error("Start Syncthing is not offered once Syncthing is known to be missing")
+	}
+}
+
+// A failed tray command is noted in Recent Activity exactly once; Start and
+// the login toggles also raise a notification.
+func TestMenuFailuresNotedOnce(t *testing.T) {
+	h := newHarness(t, nil, stclient.GUIConfig{})
+	count := func(text string) int {
+		n := 0
+		for _, a := range h.a.lastSnapshot().Activity {
+			if strings.Contains(a.Text, text) {
+				n++
+			}
+		}
+		return n
+	}
+
+	h.a.handleMenu(tray.FolderPrefix + "missing-folder")
+	if n := count("No folder path available"); n != 1 {
+		t.Errorf("folder failure noted %d times", n)
+	}
+
+	h.a.openURL = func(string) error { return errors.New("synthetic open failure") }
+	h.a.handleMenu(tray.IDUpdate)
+	if n := count("synthetic open failure"); n != 1 {
+		t.Errorf("open failure noted %d times", n)
+	}
+
+	h.a.handleMenu(tray.IDOpenWebUI) // Syncthing is not running
+	if n := count(string(errNoSyncthing)); n != 1 {
+		t.Errorf("Open Web UI without Syncthing noted %d times", n)
+	}
+
+	h.a.mu.Lock()
+	h.a.inst, h.a.instFound = stinstall.Install{Bin: filepath.Join(t.TempDir(), "syncthing")}, true
+	h.a.mu.Unlock()
+	h.a.discover = func(context.Context, string) (stclient.Endpoint, string, error) {
+		return stclient.Endpoint{}, "", errors.New("synthetic discover failure")
+	}
+	h.a.handleMenu(tray.IDStartSyncthing)
+	if n := count("starting Syncthing is not allowed in tests"); n != 1 {
+		t.Errorf("start failure noted %d times", n)
+	}
+
+	h.a.exe = ""
+	h.a.handleMenu(tray.IDAutostartTray)
+	if n := count("executable was not found"); n != 1 {
+		t.Errorf("startup toggle failure noted %d times", n)
+	}
+
+	var got []string
+	for _, n := range h.notifications() {
+		got = append(got, n.title+": "+n.body)
+	}
+	want := []string{
+		"Syncthing: Start failed: starting Syncthing is not allowed in tests",
+		"SyncThing V2: Startup toggle failed: the SyncThing V2 executable was not found",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("notifications = %q, want %q", got, want)
+	}
+}
+
+// On macOS the login item must not point at the disk image or an App
+// Translocation copy, which are gone after an eject or restart.
+func TestTrayAutostartRefusesTransientMacPaths(t *testing.T) {
+	saved := goos
+	t.Cleanup(func() { goos = saved })
+	goos = "darwin"
+	h := newHarness(t, nil, stclient.GUIConfig{})
+	for _, exe := range []string{
+		"/Volumes/SyncThing V2/SyncThing V2.app/Contents/MacOS/stv2",
+		"/private/var/folders/ab/cd/T/AppTranslocation/0A1B/d/SyncThing V2.app/Contents/MacOS/stv2",
+	} {
+		h.a.exe = exe
+		err := h.a.setAutostart("tray", true)
+		var ue userError
+		if !errors.As(err, &ue) || !strings.Contains(err.Error(), "Move SyncThing V2 to Applications first") {
+			t.Errorf("%s: err = %v", exe, err)
+		}
+	}
+	if len(h.auto.sets) != 0 {
+		t.Errorf("login item written: %q", h.auto.sets)
+	}
+	h.a.exe = "/Applications/SyncThing V2.app/Contents/MacOS/stv2"
+	if err := h.a.setAutostart("tray", true); err != nil {
+		t.Fatal(err)
+	}
+	// Turning it off is always allowed.
+	h.a.exe = "/Volumes/SyncThing V2/SyncThing V2.app/Contents/MacOS/stv2"
+	if err := h.a.setAutostart("tray", false); err != nil {
+		t.Errorf("turning the login item off: %v", err)
+	}
+}
+
+// Without a native folder picker (Linux without zenity or kdialog) the
+// pick-folder action tells the page to ask for a typed path.
+func TestPickFolderUnavailable(t *testing.T) {
+	h := newHarness(t, nil, stclient.GUIConfig{})
+	h.a.pickFolder = func(string, string) (string, error) { return "", picker.ErrUnavailable }
+	r, err := act(t, h.a, "pick-folder", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, ok := r.(map[string]any); !ok || m["unavailable"] != true || m["path"] != "" {
+		t.Fatalf("pick-folder without a picker = %#v, want unavailable", r)
+	}
+	h.a.pickFolder = func(string, string) (string, error) { return "/synthetic/Sync/Docs", nil }
+	r, err = act(t, h.a, "pick-folder", nil)
+	if m, ok := r.(map[string]any); err != nil || !ok || m["path"] != "/synthetic/Sync/Docs" || m["unavailable"] != nil {
+		t.Fatalf("pick-folder = %#v, %v", r, err)
+	}
+	h.a.pickFolder = func(string, string) (string, error) { return "", errors.New("picker crashed") }
+	if _, err := act(t, h.a, "pick-folder", nil); err == nil {
+		t.Fatal("a picker failure was not reported")
 	}
 }

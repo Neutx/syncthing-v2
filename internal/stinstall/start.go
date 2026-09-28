@@ -3,6 +3,8 @@ package stinstall
 import (
 	"fmt"
 	"path/filepath"
+
+	"github.com/Neutx/syncthing-v2/internal/osutil"
 )
 
 // Start launches Syncthing as a detached process that is never a child the
@@ -11,8 +13,13 @@ import (
 // and Linux it first asks launchd or systemd to start SyncThing V2's own
 // Syncthing entry when one is registered. extraArgs (for example --home for
 // a sandbox instance) are appended to the serve flags and always start the
-// binary directly.
+// binary directly. An elevated process (administrator on Windows, root on
+// macOS and Linux) refuses, so the network-facing daemon never inherits
+// administrator rights (osutil.CheckUnprivileged).
 func Start(bin string, extraArgs ...string) error {
+	if err := osutil.CheckUnprivileged(); err != nil {
+		return fmt.Errorf("start syncthing: %w", err)
+	}
 	if !filepath.IsAbs(bin) {
 		return fmt.Errorf("start syncthing: %q is not an absolute path", bin)
 	}

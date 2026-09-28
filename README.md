@@ -24,7 +24,7 @@ The screenshots come from demo mode (`stv2 demo`), which shows made-up devices, 
 ## Quick start
 
 1. **Install Tailscale on both computers** and sign in to the same account. See [docs/tailscale-setup.md](docs/tailscale-setup.md).
-2. **Run the one-liner for your OS on both computers** (see below). SyncThing V2 installs for your user only. If Syncthing is missing, it downloads a verified copy and sets it up.
+2. **Run the one-liner for your OS on both computers** (see below). SyncThing V2 installs for your user only. If Syncthing is missing, it downloads a verified copy and sets it up. On Windows, also click **Allow through firewall** on the Welcome screen and approve the administrator prompt: pairing needs both computers to accept connections on port 22000 (see [docs/pairing.md](docs/pairing.md)).
 3. **Pair.** Open the dashboard from the tray icon on one computer, go to **Pair devices** and click **Pair** next to the other computer. On the other computer, click **Accept** in the notification or the dashboard. Then share a folder, and accept it on the other side.
 
 ### One-line install
@@ -64,7 +64,7 @@ Both scripts download the release for your platform, check it against `SHA256SUM
 
 | Platform | Status | Package | Dashboard |
 |---|---|---|---|
-| Windows 10 1809+ and 11 (x64; Arm64 through emulation) | **Stable** | `SyncThingV2-Setup-<version>-windows-x64.exe`, PowerShell one-liner | Glass popup (WebView2); browser if WebView2 is missing |
+| Windows 10 1809+ and 11 (x64; Windows 11 on Arm through x64 emulation) | **Stable** | `SyncThingV2-Setup-<version>-windows-x64.exe`, PowerShell one-liner | Glass popup (WebView2); browser if WebView2 is missing |
 | macOS 12+ (Apple silicon and Intel) | **Preview** | `.dmg`, `.tar.gz`, shell one-liner | Default browser |
 | Linux x64 and arm64 (glibc or musl; X11 or Wayland) | **Preview** | `.deb`, `.tar.gz`, shell one-liner | Default browser |
 

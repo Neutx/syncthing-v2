@@ -534,11 +534,27 @@ func TestKnownAndManagedPaths(t *testing.T) {
 	if !reflect.DeepEqual(winKnown, wantWin) {
 		t.Errorf("windows known paths = %v, want %v", winKnown, wantWin)
 	}
-	if got := knownPaths("linux", env(nil), h); got[1] != filepath.Join(home, ".local", "bin", "syncthing") || got[0] != "/usr/bin/syncthing" || got[2] != "/snap/bin/syncthing" {
-		t.Errorf("linux known paths = %v", got)
+	wantLinux := []string{
+		"/usr/bin/syncthing",
+		filepath.Join(home, ".local", "bin", "syncthing"),
+		"/snap/bin/syncthing",
+		"/usr/local/bin/syncthing",
+		"/home/linuxbrew/.linuxbrew/bin/syncthing",
+		filepath.Join(home, ".linuxbrew", "bin", "syncthing"),
+		filepath.Join(home, ".nix-profile", "bin", "syncthing"),
 	}
-	if got := knownPaths("darwin", env(nil), h); len(got) != 3 || got[0] != "/opt/homebrew/bin/syncthing" {
-		t.Errorf("darwin known paths = %v", got)
+	if got := knownPaths("linux", env(nil), h); !reflect.DeepEqual(got, wantLinux) {
+		t.Errorf("linux known paths = %v, want %v", got, wantLinux)
+	}
+	wantDarwin := []string{
+		"/opt/homebrew/bin/syncthing",
+		"/usr/local/bin/syncthing",
+		"/Applications/Syncthing.app/Contents/Resources/syncthing/syncthing",
+		"/opt/local/bin/syncthing",
+		filepath.Join(home, ".nix-profile", "bin", "syncthing"),
+	}
+	if got := knownPaths("darwin", env(nil), h); !reflect.DeepEqual(got, wantDarwin) {
+		t.Errorf("darwin known paths = %v, want %v", got, wantDarwin)
 	}
 
 	for _, c := range []struct {
@@ -578,10 +594,45 @@ func TestKnownAndManagedPaths(t *testing.T) {
 }
 
 func TestParsePS(t *testing.T) {
-	out := []byte("  1 /sbin/launchd\n 501 /Applications/Syncthing.app/Contents/Resources/syncthing/syncthing\n 502 syncthing\n 503 /usr/local/bin/syncthing-inotify\n 504 /opt/homebrew/bin/syncthing\nbad line\n")
-	want := []string{"/Applications/Syncthing.app/Contents/Resources/syncthing/syncthing", "/opt/homebrew/bin/syncthing"}
-	if got := parsePS(out); !reflect.DeepEqual(got, want) {
+	out := []byte("  1     0 /sbin/launchd\n" +
+		" 501   501 /Applications/Syncthing.app/Contents/Resources/syncthing/syncthing\n" +
+		" 502   501 syncthing\n" +
+		" 503   501 /usr/local/bin/syncthing-inotify\n" +
+		" 504   501 /opt/homebrew/bin/syncthing\n" +
+		" 505   502 /Users/Shared/bin/syncthing\n" + // another user's process
+		" 506     0 /usr/local/bin/syncthing\n" + // root's process
+		" 507   501 /Applications/Sync Tools.app/Contents/MacOS/syncthing\n" +
+		"bad line\n 508 /opt/homebrew/bin/syncthing\n")
+	want := []string{
+		"/Applications/Syncthing.app/Contents/Resources/syncthing/syncthing",
+		"/opt/homebrew/bin/syncthing",
+		"/Applications/Sync Tools.app/Contents/MacOS/syncthing",
+	}
+	if got := parsePS(out, 501); !reflect.DeepEqual(got, want) {
 		t.Errorf("parsePS = %v, want %v", got, want)
+	}
+	if got := parsePS(out, 502); !reflect.DeepEqual(got, []string{"/Users/Shared/bin/syncthing"}) {
+		t.Errorf("parsePS for uid 502 = %v", got)
+	}
+}
+
+func TestSnapLauncher(t *testing.T) {
+	for _, c := range []struct {
+		exe, launcher string
+		isSnap        bool
+	}{
+		{"/snap/syncthing/123/syncthing", "/snap/bin/syncthing", true},
+		{"/snap/syncthing/current/bin/syncthing", "/snap/bin/syncthing", true},
+		{"/snap/bin/syncthing", "/snap/bin/syncthing", true},
+		{"/snap/", "", false},
+		{"/snap/../usr/bin/syncthing", "", false},
+		{"/usr/bin/syncthing", "", false},
+		{"/snapshots/syncthing", "", false},
+	} {
+		launcher, isSnap := snapLauncher(c.exe)
+		if launcher != c.launcher || isSnap != c.isSnap {
+			t.Errorf("snapLauncher(%q) = %q, %v; want %q, %v", c.exe, launcher, isSnap, c.launcher, c.isSnap)
+		}
 	}
 }
 
@@ -606,8 +657,94 @@ func TestProcSyncthing(t *testing.T) {
 	mk("20", "syncthing", "/home/u/.local/share/syncthing-v2/syncthing/syncthing (deleted)")
 	mk("self", "syncthing", "/usr/bin/syncthing")
 	want := []string{"/home/u/.local/share/syncthing-v2/syncthing/syncthing"}
-	if got := procSyncthing(context.Background(), proc); !reflect.DeepEqual(got, want) {
+	none := func(string) bool { return false }
+	if got := procSyncthing(context.Background(), proc, none); !reflect.DeepEqual(got, want) {
 		t.Errorf("procSyncthing = %v, want %v", got, want)
+	}
+
+	// A snap Syncthing is reported as its launcher, never by its path inside
+	// the snap; without a launcher it is skipped.
+	mk("30", "syncthing", "/snap/syncthing/123/syncthing")
+	if got := procSyncthing(context.Background(), proc, none); !reflect.DeepEqual(got, want) {
+		t.Errorf("procSyncthing without launcher = %v, want %v", got, want)
+	}
+	launcher := fakeFS{"/snap/bin/syncthing": true}
+	wantSnap := append(want, "/snap/bin/syncthing")
+	if got := procSyncthing(context.Background(), proc, launcher.isFile); !reflect.DeepEqual(got, wantSnap) {
+		t.Errorf("procSyncthing with launcher = %v, want %v", got, wantSnap)
+	}
+
+	// Detect then adopts the launcher as the running Syncthing.
+	d := detector{
+		goos:      "linux",
+		getenv:    func(string) string { return "" },
+		home:      func() (string, error) { return "/home/u", nil },
+		running:   func(ctx context.Context) []string { return procSyncthing(ctx, proc, launcher.isFile) },
+		lookPath:  func(string) (string, error) { return "", errors.New("not found") },
+		isFile:    launcher.isFile,
+		version:   func(context.Context, string) string { return "v2.1.5" },
+		config:    func(context.Context, string) string { return "" },
+		autostart: func() bool { return false },
+	}
+	in, err := d.detect(context.Background())
+	if err != nil || in.Bin != "/snap/bin/syncthing" || !in.Running {
+		t.Errorf("detect = %+v, %v; want running /snap/bin/syncthing", in, err)
+	}
+}
+
+// A running Syncthing seen through /proc/<pid>/exe is the resolved store path
+// (Homebrew Cellar, Nix store), which the next upgrade or garbage collection
+// deletes. Detect reports the stable symlink that points at it instead, so
+// login entries keep working.
+func TestDetectPrefersStableLink(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	cellar := filepath.Join(root, "linuxbrew", "Cellar", "syncthing", "2.1.5", "bin", "syncthing")
+	brewLink := filepath.Join(root, "linuxbrew", "bin", "syncthing")
+	store := filepath.Join(root, "nix", "store", "abc123-syncthing-2.1.5", "bin", "syncthing")
+	nixLink := filepath.Join(home, ".nix-profile", "bin", "syncthing")
+	plain := filepath.Join(root, "opt", "syncthing")
+	files := fakeFS{cellar: true, brewLink: true, store: true, nixLink: true, plain: true}
+	links := map[string]string{brewLink: cellar, nixLink: store}
+
+	mk := func(run, onPath string) detector {
+		return detector{
+			goos:    "linux",
+			getenv:  func(string) string { return "" },
+			home:    func() (string, error) { return home, nil },
+			running: func(context.Context) []string { return []string{run} },
+			lookPath: func(string) (string, error) {
+				if onPath == "" {
+					return "", errors.New("not found")
+				}
+				return onPath, nil
+			},
+			isFile:    files.isFile,
+			version:   func(context.Context, string) string { return "v2.1.5" },
+			config:    func(context.Context, string) string { return "" },
+			autostart: func() bool { return false },
+			resolve: func(p string) (string, error) {
+				if r, ok := links[p]; ok {
+					return r, nil
+				}
+				return p, nil
+			},
+		}
+	}
+	for _, c := range []struct {
+		name, run, onPath, want string
+	}{
+		{"Linuxbrew Cellar -> PATH symlink", cellar, brewLink, brewLink},
+		{"Nix store -> ~/.nix-profile", store, "", nixLink},
+		{"no link points at it", cellar, plain, cellar},
+		{"not versioned", plain, brewLink, plain},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			in, err := mk(c.run, c.onPath).detect(context.Background())
+			if err != nil || in.Bin != c.want || !in.Running {
+				t.Errorf("detect = %+v, %v; want running %s", in, err, c.want)
+			}
+		})
 	}
 }
 
@@ -688,6 +825,8 @@ func TestFilterEnv(t *testing.T) {
 }
 
 func TestStartDetached(t *testing.T) {
+	// CI's Windows runners are elevated; Start refuses that without the override.
+	t.Setenv(osutil.AllowPrivilegedEnv, "1")
 	out := filepath.Join(t.TempDir(), "record.json")
 	t.Setenv(fakeModeEnv, "ok")
 	t.Setenv(fakeOutEnv, out)

@@ -163,11 +163,16 @@ func TestPairing(t *testing.T) {
 		}
 
 		// 4.8: pending ID A, but the device answering on the pending address is B.
+		// Evaluated by a third computer, since B's own address is "this computer" to B.
 		wrong := pd
 		wrong.Addr = b.syncAddr()
 		probedB, perrB := pairing.Probe(ctx, b.syncAddr())
-		if d := loopback.Decide(wrong, viewB, probedB, perrB); d.Action != pairing.ActionIgnore || d.Reason != pairing.ReasonMismatch {
+		if d := loopback.Decide(wrong, view(nodeOther, nodeA, nodeB), probedB, perrB); d.Action != pairing.ActionIgnore || d.Reason != pairing.ReasonMismatch {
 			t.Errorf("Decide(A's ID from B's address) = %+v, want ignore, %q", d, pairing.ReasonMismatch)
+		}
+		// On B itself, a request from B's own address is ignored before any probe result counts.
+		if d := loopback.Decide(wrong, viewB, probedB, perrB); d.Action != pairing.ActionIgnore || d.Reason != pairing.ReasonSelf {
+			t.Errorf("Decide(A's ID from B's address, on B) = %+v, want ignore, %q", d, pairing.ReasonSelf)
 		}
 		// The same case through a Watcher: an address-rewriting middlebox makes
 		// A's address lead to B's Syncthing.

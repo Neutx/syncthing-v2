@@ -55,6 +55,7 @@ func DefaultRoots() (Roots, error) {
 	if err != nil {
 		return Roots{}, err
 	}
+	legacyExe := filepath.Join(lad, "Programs", "Syncthing", "tray", LegacyProcess)
 	return Roots{
 		InstallDir:          filepath.Join(lad, "Programs", brand.AppDirName()),
 		DataDir:             data,
@@ -63,8 +64,9 @@ func DefaultRoots() (Roots, error) {
 		UninstallKey:        UninstallKey,
 		StartMenuDir:        programs,
 		StartupDir:          ar.StartupDir,
+		LegacyExe:           legacyExe,
 		Processes:           listProcesses,
-		Terminate:           terminateProcess,
+		Terminate:           func(pid int) error { return terminateProcess(pid, legacyExe) },
 		FirewallRule:        HasFirewallRule,
 	}, nil
 }
@@ -189,7 +191,11 @@ func removeProgram(r Roots, o Options, _ bool, leftovers []string) ([]string, er
 	// The managed Syncthing was already removed when the user asked for it,
 	// so the whole directory may go when no Syncthing is left inside it.
 	wholeDir := !exists(r.ManagedSyncthingDir) || !within(r.ManagedSyncthingDir, r.InstallDir)
-	script, err := selfDeleteScript(r, self, wholeDir, leftovers)
+	sys, err := windows.GetSystemDirectory()
+	if err != nil {
+		return nil, err
+	}
+	script, err := selfDeleteScript(sys, r, self, wholeDir, leftovers)
 	if err != nil {
 		return nil, err
 	}
@@ -201,22 +207,28 @@ func removeProgram(r Roots, o Options, _ bool, leftovers []string) ([]string, er
 
 // selfDeleteScript is the cmd.exe script run after exit (spec §6.1):
 //
-//	ping -n 3 127.0.0.1 >nul & rmdir /s /q "<install dir>"
+//	"<system dir>\PING.EXE" -n 3 127.0.0.1 >nul & rmdir /s /q "<install dir>"
 //
-// When a kept managed Syncthing lives inside the install dir, only our
-// files are deleted and the directory stays. program is false when the
-// program files are already gone and only leftovers remain.
-func selfDeleteScript(r Roots, program, wholeDir bool, leftovers []string) (string, error) {
-	for _, p := range append([]string{r.InstallDir}, leftovers...) {
+// ping is named by its full path in sys (the Windows system directory):
+// cmd.exe looks for a bare command name in the current directory before
+// PATH, so a planted ping.bat there must never run, least of all from an
+// elevated uninstall. When a kept managed Syncthing lives inside the install
+// dir, only our files are deleted and the directory stays. program is false
+// when the program files are already gone and only leftovers remain.
+func selfDeleteScript(sys string, r Roots, program, wholeDir bool, leftovers []string) (string, error) {
+	ping := filepath.Join(sys, "PING.EXE")
+	for _, p := range append([]string{ping, r.InstallDir}, leftovers...) {
 		if err := checkCmdPath(p); err != nil {
 			return "", err
 		}
+	}
+	for _, p := range append([]string{r.InstallDir}, leftovers...) {
 		if filepath.Dir(filepath.Clean(p)) == filepath.Clean(p) {
 			return "", fmt.Errorf("refusing to remove the volume root %q", p)
 		}
 	}
 	var b strings.Builder
-	b.WriteString("ping -n 3 127.0.0.1 >nul")
+	b.WriteString(`"` + ping + `" -n 3 127.0.0.1 >nul`)
 	exe := InstalledExe(r)
 	switch {
 	case program && wholeDir:
@@ -241,7 +253,9 @@ func selfDelete(script string) error {
 	comspec := filepath.Join(sys, "cmd.exe")
 	cmd := osutil.Detached(comspec)
 	cmd.SysProcAttr.CmdLine = selfDeleteCommandLine(comspec, script)
-	cmd.Dir = os.TempDir() // never hold the directory being deleted open
+	// Never hold the directory being deleted open, and never run from a
+	// directory other processes of this user can write to.
+	cmd.Dir = sys
 	if err := cmd.Start(); err != nil {
 		return err
 	}

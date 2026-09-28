@@ -57,6 +57,7 @@ const quitWait = 5 * time.Second
 type Process struct {
 	PID  int
 	Name string // executable base name, e.g. "SyncthingTray.exe"
+	Path string // full executable path; "" when it could not be read
 }
 
 // Roots are the locations and side effects Install and Uninstall work with.
@@ -85,6 +86,12 @@ type Roots struct {
 	UninstallKey string
 	StartMenuDir string // ...\Start Menu\Programs
 	StartupDir   string // ...\Start Menu\Programs\Startup (legacy detection)
+	// LegacyExe is where SyncThing V2's own earlier prototype tray lived:
+	// %LOCALAPPDATA%\Programs\Syncthing\tray\SyncthingTray.exe. Only a
+	// process running from this exact file, and a Startup shortcut pointing
+	// at it, count as the legacy tray; the unrelated "Syncthing Tray" project
+	// (syncthingtray.exe) is never touched. "" disables legacy detection.
+	LegacyExe string
 
 	// Linux.
 	LinkDir         string   // ~/.local/bin
@@ -645,24 +652,31 @@ const (
 // Legacy is what legacy detection found.
 type Legacy struct {
 	Shortcut string // path of Startup\Syncthing Tray.lnk, "" if absent
-	PIDs     []int  // running SyncthingTray.exe processes
+	PIDs     []int  // running processes of Roots.LegacyExe
 }
 
 // Found reports whether the legacy tray is installed or running.
 func (l Legacy) Found() bool { return l.Shortcut != "" || len(l.PIDs) > 0 }
 
-func detectLegacy(startupDir string, procs func() ([]Process, error)) Legacy {
+// detectLegacy finds SyncThing V2's own earlier prototype tray: processes
+// whose full path is r.LegacyExe, and a Startup "Syncthing Tray.lnk" whose
+// target is r.LegacyExe. A process or shortcut of the same name elsewhere
+// (such as the unrelated Syncthing Tray project) is not the legacy tray.
+func detectLegacy(r Roots) Legacy {
 	var l Legacy
-	if startupDir != "" {
-		p := filepath.Join(startupDir, LegacyShortcut)
-		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+	if r.LegacyExe == "" {
+		return l
+	}
+	if r.StartupDir != "" {
+		p := filepath.Join(r.StartupDir, LegacyShortcut)
+		if target, err := shortcutTarget(p); err == nil && samePath(target, r.LegacyExe) {
 			l.Shortcut = p
 		}
 	}
-	if procs != nil {
-		if list, err := procs(); err == nil {
+	if r.Processes != nil {
+		if list, err := r.Processes(); err == nil {
 			for _, pr := range list {
-				if strings.EqualFold(pr.Name, LegacyProcess) && pr.PID != os.Getpid() {
+				if strings.EqualFold(pr.Name, LegacyProcess) && pr.Path != "" && samePath(pr.Path, r.LegacyExe) && pr.PID != os.Getpid() {
 					l.PIDs = append(l.PIDs, pr.PID)
 				}
 			}
@@ -670,6 +684,22 @@ func detectLegacy(startupDir string, procs func() ([]Process, error)) Legacy {
 	}
 	slices.Sort(l.PIDs)
 	return l
+}
+
+// shortcutTarget returns the target path of the shell link at p.
+func shortcutTarget(p string) (string, error) {
+	if !isRegular(p) {
+		return "", fs.ErrNotExist
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return "", err
+	}
+	link, err := autostart.ParseShellLink(data)
+	if err != nil {
+		return "", err
+	}
+	return link.Target, nil
 }
 
 // migrateLegacy terminates the legacy processes and renames the shortcut to
@@ -813,9 +843,24 @@ func (f firewall) hasRule(ctx context.Context) (bool, error) {
 // self-delete script. /d skips the AutoRun commands and /v:off turns delayed
 // expansion off even when the Command Processor DelayedExpansion policy turns
 // it on, so a '!' in a quoted path stays literal ('%' and '"' are refused by
-// checkCmdPath).
+// checkCmdPath). /s with the script wrapped in one more pair of quotes makes
+// cmd.exe strip exactly that outer pair, so a script that starts with a
+// quoted program path keeps all of its own quotes.
 func selfDeleteCommandLine(comspec, script string) string {
-	return `"` + comspec + `" /d /v:off /c ` + script
+	return `"` + comspec + `" /d /v:off /s /c "` + script + `"`
+}
+
+// CheckLoginPath rejects a macOS executable path that a login item must not
+// point at: one on a mounted disk image (/Volumes/...) or in a Gatekeeper
+// App Translocation copy (.../AppTranslocation/...). Both are gone after the
+// image is ejected or the Mac restarts, so the login item would fail
+// silently. Callers apply it on macOS only.
+func CheckLoginPath(exe string) error {
+	p := filepath.ToSlash(filepath.Clean(exe))
+	if strings.HasPrefix(p, "/Volumes/") || strings.Contains(p, "/AppTranslocation/") {
+		return fmt.Errorf("running from a disk image or a temporary copy macOS made of it, which is gone after an eject or restart; move %s to Applications first", brand.DisplayName)
+	}
+	return nil
 }
 
 // checkCmdPath rejects paths that cannot be embedded safely in a quoted

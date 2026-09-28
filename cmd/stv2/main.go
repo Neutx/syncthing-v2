@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -68,7 +69,22 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+// trayMain runs the tray; tests replace it to check which launches reach it.
+var trayMain = runTray
+
+// dropLaunchServicesArgs removes the -psn_<n>_<n> process serial number that
+// macOS Launch Services may pass when the app is opened from Finder (notably
+// on the first, Gatekeeper-approved launch of a downloaded app). It is not a
+// command, so without this that launch would exit with "unknown command".
+func dropLaunchServicesArgs(goos string, args []string) []string {
+	if goos != "darwin" {
+		return args
+	}
+	return slices.DeleteFunc(slices.Clone(args), func(a string) bool { return strings.HasPrefix(a, "-psn_") })
+}
+
 func run(args []string) int {
+	args = dropLaunchServicesArgs(runtime.GOOS, args)
 	cmd := ""
 	if len(args) > 0 {
 		cmd = args[0]
@@ -80,7 +96,7 @@ func run(args []string) int {
 			fmt.Fprintf(os.Stderr, "unexpected argument %q\n\n%s", args[1], usage)
 			return exitUsage
 		}
-		return runTray(strings.TrimLeft(cmd, "-"))
+		return trayMain(strings.TrimLeft(cmd, "-"))
 	case "ui-host":
 		if err := uihost.RunChild(); err != nil {
 			fmt.Fprintf(os.Stderr, "ui-host: %v\n", err)
@@ -146,6 +162,13 @@ func fail(err error) int {
 
 // runTray runs the tray, or shows the dashboard of the one already running.
 func runTray(mode string) int {
+	if err := osutil.CheckUnprivileged(); err != nil {
+		// The tray has no console; tell the user where it can (Windows).
+		if show := messageBox(); show != nil {
+			show("Cannot start "+brand.DisplayName, err.Error())
+		}
+		return fail(err)
+	}
 	lock, err := app.Acquire()
 	if errors.Is(err, single.ErrAlreadyRunning) {
 		if mode == "background" {
@@ -232,6 +255,10 @@ func cmdInstall(args []string) int {
 	noStart := fs.Bool("no-start", false, "do not start SyncThing V2 afterwards")
 	if !parse(fs, args, 0) {
 		return exitUsage
+	}
+	// The install starts the tray, which starts Syncthing: never elevated.
+	if err := osutil.CheckUnprivileged(); err != nil {
+		return fail(err)
 	}
 	if !*yes && !confirm(installQuestion()) {
 		fmt.Fprintln(os.Stdout, "Installation cancelled.")

@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.0.0] - Unreleased
 
-The first public release. SyncThing V2 replaces the Windows-only "Syncthing Tray" prototype, a C# WinForms tray with a "Liquid Glass" dashboard. It keeps every prototype feature, and runs on Windows, macOS and Linux.
+The first public release. SyncThing V2 replaces its own earlier Windows-only C# prototype (not the Syncthing Tray project by Martchus, which is left alone), a WinForms tray with a "Liquid Glass" dashboard. It keeps every prototype feature, and runs on Windows, macOS and Linux.
 
 ### Added
 
@@ -39,7 +39,7 @@ The first public release. SyncThing V2 replaces the Windows-only "Syncthing Tray
   - "No paired device is reachable right now."
   - "Waiting for a device"
 - The single-instance mutex is now `Local\SyncThingV2.Tray`, so SyncThing V2 and the prototype can run side by side during migration. Launching SyncThing V2 a second time opens the running copy's dashboard.
-- The Windows install detects the prototype tray and offers, once, to stop it and disable its startup shortcut. The shortcut is renamed to `Syncthing Tray.lnk.disabled`, which can be reversed.
+- The Windows install detects the prototype tray (only at its own install location, so the unrelated Syncthing Tray project is never touched) and offers, once, to stop it and disable its startup shortcut. The shortcut is renamed to `Syncthing Tray.lnk.disabled`, which can be reversed.
 
 ### Fixed
 

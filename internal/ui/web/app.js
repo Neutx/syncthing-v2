@@ -331,7 +331,7 @@
     // The bar reports completeness, so it never borrows the connection's red.
     const barCol = st === 'syncing' ? COL.accent
       : st === 'scanning' ? COL.scanning
-      : (st === 'paused' || st === 'down' || st === 'unauthorized') ? COL.barIdle
+      : (st === 'paused' || offline(snap)) ? COL.barIdle
       : errorCount(snap) > 0 ? COL.error
       : COL.insync;
 
@@ -465,9 +465,16 @@
     $('presence-halo').style.backgroundColor = c;
   }
 
+  // offline reports whether s holds no sync progress to show: Syncthing is
+  // down or refused us, or the error came before any folder was read.
+  function offline(s) {
+    const st = s ? s.StateName : 'down';
+    return st === 'down' || st === 'unauthorized' || (st === 'error' && !(s.Folders || []).length);
+  }
+
   function renderSync(s) {
     const st = s.StateName;
-    setText('sync-big', st === 'insync' ? 'Up to date' : (st === 'down' || st === 'unauthorized') ? 'Offline' : (s.Pct || 0) + '%');
+    setText('sync-big', st === 'insync' ? 'Up to date' : s.Connecting ? '-' : offline(s) ? 'Offline' : (s.Pct || 0) + '%');
     setText('files-line', s.FilesLine || '');
     setText('size-line', s.SizeLine || '');
     setText('need-line', s.NeedItems > 0 ? grp(s.NeedItems) + ' items pending' : 'nothing queued');
@@ -735,8 +742,7 @@
         { label: 'Accept', primary: true, run: () => act('accept-folder', base) },
         {
           label: 'Choose location…',
-          run: () => act('pick-folder').then((r) => {
-            const path = typeof r === 'string' ? r : (r && r.path) || '';
+          run: () => chooseFolder('Where should "' + (pf.Label || pf.FolderID) + '" be saved?').then((path) => {
             if (!path) throw new Error('No folder chosen');
             return act('accept-folder', Object.assign({ path: path }, base));
           })
@@ -749,7 +755,7 @@
   function buildNotices(s) {
     const out = [];
     const st = s.StateName;
-    if (st === 'down') {
+    if (st === 'down' && !s.Connecting) {
       out.push({
         key: 'state:down', kind: 'warn', title: [{ t: 'Syncthing is not running' }], body: s.Detail || '',
         actions: [{ label: 'Start Syncthing', primary: true, run: () => act('start-syncthing') }]
@@ -1021,8 +1027,7 @@
         renderShare();
       })));
       fbox.appendChild(choice('radio', 'share-folder', 'New folder…', share.newPath || 'Choose a location', !!share.newPath, () => {
-        act('pick-folder').then((r) => {
-          const path = typeof r === 'string' ? r : (r && r.path) || '';
+        chooseFolder('Choose a folder to share').then((path) => {
           if (path) { share.newPath = path; share.folderID = ''; }
         }).catch((e) => toast(e.message, true)).then(() => { shareSig = ''; renderShare(); });
       }));
@@ -1052,6 +1057,49 @@
     lab.appendChild(txt);
     return lab;
   }
+
+  // ---------- folder choice: native picker, or a typed path without one ----------
+  let pathResolve = null;
+
+  // chooseFolder resolves to the chosen absolute path, or '' if cancelled.
+  // Where no native picker is installed (Linux without zenity or kdialog)
+  // it asks for a typed path instead.
+  function chooseFolder(title) {
+    return act('pick-folder').then((r) => {
+      if (r && r.unavailable) return askPath(title);
+      return typeof r === 'string' ? r : (r && r.path) || '';
+    });
+  }
+
+  function askPath(title) {
+    closePathEntry('');
+    return new Promise((resolve) => {
+      pathResolve = resolve;
+      $('path-entry-title').textContent = title;
+      $('path-entry-input').value = '';
+      $('path-entry').hidden = false;
+      $('path-entry-input').focus();
+    });
+  }
+
+  function closePathEntry(value) {
+    $('path-entry').hidden = true;
+    const resolve = pathResolve;
+    pathResolve = null;
+    if (resolve) resolve(value);
+  }
+
+  function submitPathEntry() {
+    const v = $('path-entry-input').value.trim();
+    if (!v) { $('path-entry-input').focus(); return; }
+    closePathEntry(v);
+  }
+
+  $('path-entry-ok').addEventListener('click', submitPathEntry);
+  $('path-entry-cancel').addEventListener('click', () => closePathEntry(''));
+  $('path-entry-input').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); submitPathEntry(); }
+  });
 
   $('pair-refresh').addEventListener('click', discover);
   $('share-open').addEventListener('click', openShare);
@@ -1171,7 +1219,7 @@
     const st = s.StateName || 'down';
     const off = st === 'down' || st === 'unauthorized';
     setText('wel-st', off ? (s.Detail || s.Subline || 'Syncthing is not running.') : 'Syncthing is running.');
-    $('wel-st-actions').hidden = st !== 'down';
+    $('wel-st-actions').hidden = st !== 'down' || !!s.Connecting;
     const tsMissing = (s.Notices || []).indexOf('tailscale-missing') >= 0;
     setText('wel-ts', tsMissing
       ? 'Tailscale is not installed. ' + info.name + ' finds your other computers through it: install it and sign in on each of them.'
@@ -1292,14 +1340,21 @@
   });
   document.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Escape') return;
+    if (!$('path-entry').hidden) { closePathEntry(''); return; }
     if (!folderMenu.hidden) { closeFolderMenu(); $('btn-folder').focus(); return; }
     if (!$('prof-confirm').hidden) { $('prof-confirm').hidden = true; renderSettings(); return; }
     if (view !== 'status') { setView('status'); return; }
     beginHide();
   });
 
+  // setCorner anchors the entrance scale at the tray corner the host placed
+  // the popup in (spec §8.1 Motion).
+  function setCorner(c) {
+    if (MODE !== 'browser' && CORNERS[c]) stage.style.transformOrigin = CORNERS[c];
+  }
+
   // Hosts may drive the page directly (WebView2 ExecuteScript, WKWebView).
-  window.stv2 = { show: show, hide: beginHide, view: (v) => setView(v) };
+  window.stv2 = { show: show, hide: beginHide, view: (v) => setView(v), corner: setCorner };
 
   // ---------- state stream ----------
   function showExpired() {

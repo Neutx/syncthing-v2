@@ -104,8 +104,12 @@ func TestParseRunning(t *testing.T) {
 
 func TestFindByIP(t *testing.T) {
 	st := load(t, "status-running.json")
-	if n, ok := st.FindByIP(netip.MustParseAddr("100.64.0.1")); !ok || n.ID != st.Self.ID {
-		t.Errorf("self lookup = %+v, %v", n, ok)
+	// This computer's own addresses never resolve to a node.
+	if n, ok := st.FindByIP(netip.MustParseAddr("100.64.0.1")); ok {
+		t.Errorf("self lookup = %+v, want no match", n)
+	}
+	if !st.SelfHasIP(netip.MustParseAddr("::ffff:100.64.0.1")) || st.SelfHasIP(netip.MustParseAddr("100.64.0.2")) || st.SelfHasIP(netip.Addr{}) {
+		t.Error("SelfHasIP matched the wrong addresses")
 	}
 	// IPv4-mapped IPv6 input is unmapped before the lookup.
 	if n, ok := st.FindByIP(netip.MustParseAddr("::ffff:100.64.0.2")); !ok || n.HostName != "example-laptop" {

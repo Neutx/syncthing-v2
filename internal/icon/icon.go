@@ -47,9 +47,14 @@ var (
 	colDown     = color.NRGBA{0x6E, 0x6E, 0x73, 0xFF} // Down and Unauthorized
 )
 
-// AppState is the look of the application icon (assets/icons) and of the
-// tray icon before the first status poll: the in-sync ring with its tick.
+// AppState is the look of the application icon (assets/icons): the in-sync
+// ring with its tick.
 const AppState = model.StateInSync
+
+// PendingState is the look of the tray icon before the state of Syncthing is
+// known: the grey ring with a centre dot, with neither a tick nor an X, so it
+// claims nothing (the tooltip says "starting...").
+const PendingState = model.StateDown
 
 // StateColor returns the ring colour used for state s.
 func StateColor(s model.State) color.NRGBA {

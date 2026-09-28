@@ -259,8 +259,8 @@ func TestInitialIconIsAppIcon(t *testing.T) {
 		}
 	}()
 	tr.renderIcon(0)
-	if tr.hicon == 0 || tr.shown.state != icon.AppState {
-		t.Fatalf("before SetIcon: shown %+v, want the app state %v", tr.shown, icon.AppState)
+	if tr.hicon == 0 || tr.shown.state != icon.PendingState {
+		t.Fatalf("before SetIcon: shown %+v, want the pending state %v", tr.shown, icon.PendingState)
 	}
 	if tr.tip != startingTooltip {
 		t.Errorf("initial tooltip %q, want %q", tr.tip, startingTooltip)

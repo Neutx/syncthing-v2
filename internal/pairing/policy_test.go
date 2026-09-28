@@ -38,6 +38,8 @@ func TestDecideTruthTable(t *testing.T) {
 		{"same owner over IPv6", pending(idMac, "[fd7a:115c:a1e0::3]:51000"), idMac, nil, ActionPrompt, ReasonSameOwner, "mac"},
 		{"same owner, 4in6 address", pending(idLaptop, "[::ffff:100.64.0.2]:51000"), idLaptop, nil, ActionPrompt, ReasonSameOwner, "laptop"},
 		{"other owner", pending(idFriend, "100.64.0.8:51000"), idFriend, nil, ActionPrompt, ReasonOtherOwner, "friend-pc"},
+		{"this computer's own address", pending(idLaptop, "100.64.0.1:51000"), idLaptop, nil, ActionIgnore, ReasonSelf, "this-computer"},
+		{"this computer, 4in6 address", pending(idLaptop, "[::ffff:100.64.0.1]:51000"), idLaptop, nil, ActionIgnore, ReasonSelf, "this-computer"},
 		{"no address", model.PendingDevice{DeviceID: idLaptop}, idLaptop, nil, ActionIgnore, ReasonNoPendingAddr, ""},
 		{"no device ID", pending("", "100.64.0.2:51000"), idLaptop, nil, ActionIgnore, ReasonNoPendingID, ""},
 	}

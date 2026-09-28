@@ -62,13 +62,13 @@ func bundleOf(exe string) string {
 
 // placeBinary uses the binary inside its .app bundle where it is (the .app
 // was dragged to Applications or moved to ~/Applications by install.sh). A
-// bundle still on the disk image is refused, because the login item would
-// point at a volume that goes away. A bare binary (a development build) is
-// copied to <InstallDir>/stv2.
+// bundle still on the disk image or in an App Translocation copy is refused
+// (CheckLoginPath), because the login item would point at a path that goes
+// away. A bare binary (a development build) is copied to <InstallDir>/stv2.
 func placeBinary(r Roots, src string) (string, bool, error) {
 	if app := bundleOf(src); app != "" {
-		if strings.HasPrefix(filepath.Clean(src), "/Volumes/") {
-			return "", false, fmt.Errorf("install: %s is still on the disk image; drag it to Applications first", filepath.Base(app))
+		if err := CheckLoginPath(src); err != nil {
+			return "", false, fmt.Errorf("install: %s: %w", filepath.Base(app), err)
 		}
 		return src, false, nil
 	}

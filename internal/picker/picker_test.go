@@ -1,6 +1,7 @@
 package picker
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -87,7 +88,7 @@ func TestFolderWithoutPickerOnLinux(t *testing.T) {
 	}
 	t.Setenv("PATH", t.TempDir()) // neither zenity nor kdialog
 	got, err := Folder("Choose", "")
-	if got != "" || err != nil {
-		t.Errorf("Folder with no picker = %q, %v; want \"\", nil", got, err)
+	if got != "" || !errors.Is(err, ErrUnavailable) {
+		t.Errorf("Folder with no picker = %q, %v; want \"\", ErrUnavailable", got, err)
 	}
 }

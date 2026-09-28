@@ -28,6 +28,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -115,7 +116,8 @@ func (m *Manager) Enabled(t Target) (bool, error) {
 // On macOS, turning Syncthing's entry off also unloads its launchd job
 // (launchctl bootout), because launchd would otherwise keep restarting
 // Syncthing until logout. That stops a Syncthing launchd started; a caller
-// that wants syncing to go on starts Syncthing again unsupervised.
+// that wants syncing to go on checks Loaded before and starts Syncthing
+// again unsupervised when the job was loaded.
 func (m *Manager) Set(t Target, on bool, bin string, args []string) error {
 	if err := checkTarget(t); err != nil {
 		return err
@@ -127,6 +129,18 @@ func (m *Manager) Set(t Target, on bool, bin string, args []string) error {
 		bin = filepath.Clean(bin)
 	}
 	return m.impl.set(t, on, bin, args)
+}
+
+// Loaded reports whether the service manager is running SyncThing V2's own
+// job for t right now: on macOS, whether launchd has its LaunchAgent loaded
+// (turning Syncthing's entry off then stops the Syncthing it runs). It is
+// always false elsewhere.
+func (m *Manager) Loaded(t Target) bool {
+	if checkTarget(t) != nil {
+		return false
+	}
+	l, ok := m.impl.(*launchd)
+	return ok && l.loaded(t)
 }
 
 // Existing reports a Syncthing autostart entry configured outside SyncThing
@@ -211,6 +225,20 @@ func StartService(t Target) (bool, error) {
 		return false, err
 	}
 	return m.StartService(t)
+}
+
+// AppBundle returns the name of the macOS app bundle (for example
+// "Syncthing.app") whose Contents hold bin, or "". SyncThing V2 never keeps
+// Syncthing inside a bundle, so a Syncthing found there belongs to that app,
+// which starts it at login through its own login item.
+func AppBundle(bin string) string {
+	parts := strings.Split(filepath.ToSlash(bin), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if len(parts[i]) > len(".app") && strings.HasSuffix(strings.ToLower(parts[i]), ".app") && parts[i+1] == "Contents" {
+			return parts[i]
+		}
+	}
+	return ""
 }
 
 func removeIfExists(p string) error {
@@ -436,6 +464,10 @@ func (l *launchd) plistPath(t Target) string {
 	return filepath.Join(l.r.LaunchAgents, launchdLabel(t)+".plist")
 }
 
+// enabled reports whether our plist for t is in place and launchd will load
+// it at login. On macOS 13 and later the user can switch a LaunchAgent off
+// under System Settings > General > Login Items ("Allow in the Background");
+// the plist stays, but launchd records the label as disabled.
 func (l *launchd) enabled(t Target) (bool, error) {
 	data, err := os.ReadFile(l.plistPath(t))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -448,7 +480,42 @@ func (l *launchd) enabled(t Target) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("autostart: %s: %w", l.plistPath(t), err)
 	}
-	return label == launchdLabel(t), nil
+	if label != launchdLabel(t) {
+		return false, nil
+	}
+	return !l.disabled(t), nil
+}
+
+// disabled reports whether launchd's override database marks our label for
+// t as disabled (`launchctl print-disabled gui/<uid>`). Without launchctl, or
+// when it fails, nothing is known to be disabled.
+func (l *launchd) disabled(t Target) bool {
+	if l.r.Run == nil {
+		return false
+	}
+	out, err := l.r.Run(context.Background(), "launchctl", "print-disabled", "gui/"+strconv.Itoa(l.r.UID))
+	if err != nil {
+		return false
+	}
+	return labelDisabled(out, launchdLabel(t))
+}
+
+// labelDisabled parses `launchctl print-disabled` output, whose entries read
+// `"label" => disabled` (macOS 13 and later) or `"label" => true` (earlier).
+func labelDisabled(out []byte, label string) bool {
+	quoted := strconv.Quote(label)
+	for _, line := range strings.Split(string(out), "\n") {
+		name, val, ok := strings.Cut(strings.TrimSpace(line), "=>")
+		if !ok || strings.TrimSpace(name) != quoted {
+			continue
+		}
+		switch strings.TrimSpace(val) {
+		case "disabled", "true":
+			return true
+		}
+		return false
+	}
+	return false
 }
 
 func (l *launchd) set(t Target, on bool, bin string, args []string) error {
@@ -487,10 +554,23 @@ func (l *launchd) set(t Target, on bool, bin string, args []string) error {
 		}
 		logFile = filepath.Join(l.r.LogDir, "syncthing.log")
 	}
-	return osutil.WriteFileAtomic(p, renderPlist(launchdLabel(t), append([]string{bin}, args...), t == Syncthing, logFile), 0o644)
+	if err := osutil.WriteFileAtomic(p, renderPlist(launchdLabel(t), append([]string{bin}, args...), t == Syncthing, logFile), 0o644); err != nil {
+		return err
+	}
+	// A job switched off in System Settings > Login Items stays disabled
+	// whatever the plist says; turning the toggle on clears that override.
+	if l.disabled(t) {
+		service := "gui/" + strconv.Itoa(l.r.UID) + "/" + launchdLabel(t)
+		if _, err := l.r.Run(context.Background(), "launchctl", "enable", service); err != nil {
+			return fmt.Errorf("autostart: it is turned off in System Settings > General > Login Items; turn it on there (launchctl enable: %w)", err)
+		}
+	}
+	return nil
 }
 
-// existing lists ~/Library/LaunchAgents/*syncthing*.plist other than ours.
+// existing reports a LaunchAgent other than ours whose program is syncthing
+// (runsSyncthing), whatever the plist is called. A plist that cannot be read
+// as XML (a binary plist) counts when its name contains "syncthing".
 func (l *launchd) existing(Target) (string, bool) {
 	entries, err := os.ReadDir(l.r.LaunchAgents)
 	if err != nil {
@@ -500,12 +580,66 @@ func (l *launchd) existing(Target) (string, bool) {
 	for _, e := range entries {
 		n := e.Name()
 		lower := strings.ToLower(n)
-		if !strings.HasSuffix(lower, ".plist") || !strings.Contains(lower, "syncthing") || slices.Contains(own, n) {
+		if !strings.HasSuffix(lower, ".plist") || slices.Contains(own, n) {
 			continue
 		}
-		return "LaunchAgent " + n, true
+		data, err := os.ReadFile(filepath.Join(l.r.LaunchAgents, n))
+		if err != nil {
+			continue
+		}
+		vals, err := plistTopLevel(data)
+		if err != nil || bytes.HasPrefix(data, []byte("bplist")) {
+			if strings.Contains(lower, "syncthing") {
+				return "LaunchAgent " + n, true
+			}
+			continue
+		}
+		if runsSyncthing(plistArgv(vals)) {
+			return "LaunchAgent " + n, true
+		}
 	}
 	return "", false
+}
+
+// plistArgv returns the command a launchd job runs: Program, when set, is the
+// executable and ProgramArguments the argument vector.
+func plistArgv(vals map[string]string) []string {
+	var argv []string
+	if a := vals["ProgramArguments"]; a != "" {
+		argv = strings.Split(a, "\x00")
+	}
+	if p := vals["Program"]; p != "" {
+		if len(argv) == 0 {
+			return []string{p}
+		}
+		argv[0] = p
+	}
+	return argv
+}
+
+// runsSyncthing reports whether argv starts Syncthing: its program is named
+// syncthing, or it is a shell or launcher (sh -c "exec syncthing ...", env
+// syncthing ...) whose arguments name a syncthing program. Tools that only
+// have "syncthing" in their name, such as syncthingtray, do not count.
+func runsSyncthing(argv []string) bool {
+	if len(argv) == 0 {
+		return false
+	}
+	isSyncthing := func(p string) bool { return filepath.Base(strings.Trim(p, `"'`)) == "syncthing" }
+	if isSyncthing(argv[0]) {
+		return true
+	}
+	switch filepath.Base(argv[0]) {
+	case "sh", "bash", "dash", "zsh", "env", "nice", "nohup":
+		for _, a := range argv[1:] {
+			for _, w := range strings.Fields(a) {
+				if isSyncthing(w) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // startService loads (bootstrap) or starts (kickstart) our Syncthing job.
@@ -526,20 +660,25 @@ func (l *launchd) startService(t Target) (bool, error) {
 	return true, err
 }
 
-// unload boots our job for t (found by its label, which only SyncThing V2
-// uses) out of the gui/<uid> domain when launchd has it loaded. `launchctl
-// print` failing means it is not loaded, which needs no action; a job that
-// is loaded but cannot be booted out is an error.
-func (l *launchd) unload(t Target) error {
+// loaded reports whether launchd has our job for t (found by its label,
+// which only SyncThing V2 uses) loaded in the gui/<uid> domain. `launchctl
+// print` failing means it is not loaded.
+func (l *launchd) loaded(t Target) bool {
 	if l.r.Run == nil {
+		return false
+	}
+	_, err := l.r.Run(context.Background(), "launchctl", "print", "gui/"+strconv.Itoa(l.r.UID)+"/"+launchdLabel(t))
+	return err == nil
+}
+
+// unload boots our job for t out of the gui/<uid> domain when launchd has it
+// loaded. A job that is not loaded needs no action; a job that is loaded but
+// cannot be booted out is an error.
+func (l *launchd) unload(t Target) error {
+	if !l.loaded(t) {
 		return nil
 	}
-	ctx := context.Background()
-	service := "gui/" + strconv.Itoa(l.r.UID) + "/" + launchdLabel(t)
-	if _, err := l.r.Run(ctx, "launchctl", "print", service); err != nil {
-		return nil
-	}
-	_, err := l.r.Run(ctx, "launchctl", "bootout", service)
+	_, err := l.r.Run(context.Background(), "launchctl", "bootout", "gui/"+strconv.Itoa(l.r.UID)+"/"+launchdLabel(t))
 	return err
 }
 
@@ -743,7 +882,12 @@ func (x *xdg) enableDistroUnit() error {
 	if _, err := x.systemctl("--user", "daemon-reload"); err != nil {
 		return err
 	}
-	_, err := x.systemctl("--user", "enable", "--now", distroUnit)
+	// Not --now, as for our own unit: the Syncthing this toggle is about is
+	// normally already running (detected or started detached), and a second
+	// instance under systemd would fail on the database lock until the unit
+	// gives up. The unit takes over from the next login; stinstall.Start
+	// starts it through StartService when Syncthing is down.
+	_, err := x.systemctl("--user", "enable", distroUnit)
 	return err
 }
 
@@ -754,7 +898,7 @@ func (x *xdg) enableOwnUnit(bin string, args []string) error {
 	if err := os.MkdirAll(x.unitDir(), 0o755); err != nil {
 		return err
 	}
-	if err := osutil.WriteFileAtomic(x.ownUnitPath(), renderUnit(append([]string{bin}, args...)), 0o644); err != nil {
+	if err := osutil.WriteFileAtomic(x.ownUnitPath(), renderUnit(append([]string{bin}, args...), !snapLauncher(bin)), 0o644); err != nil {
 		return err
 	}
 	if _, err := x.systemctl("--user", "daemon-reload"); err != nil {
@@ -813,20 +957,14 @@ func (x *xdg) isDistroBinary(bin string) bool {
 	return false
 }
 
+// existing reports a Syncthing autostart configured outside SyncThing V2: an
+// enabled user unit or autostart entry whose program is syncthing (whatever
+// it is called, for example Linuxbrew's homebrew.syncthing.service), or the
+// system unit syncthing@<user>.service.
 func (x *xdg) existing(Target) (string, bool) {
 	if x.systemdAvailable() {
-		out, err := x.systemctl("--user", "list-unit-files", "--state=enabled", "--no-legend", "--plain", "syncthing*.service")
-		if err == nil {
-			for _, line := range strings.Split(string(out), "\n") {
-				f := strings.Fields(line)
-				if len(f) == 0 || !strings.HasPrefix(f[0], "syncthing") {
-					continue
-				}
-				if f[0] == distroUnit && exists(x.dropInPath()) {
-					continue // enabled by SyncThing V2
-				}
-				return "systemd user unit " + f[0], true
-			}
+		if unit, ok := x.foreignUnit(); ok {
+			return "systemd user unit " + unit, true
 		}
 	}
 	if x.r.User != "" && x.r.Run != nil {
@@ -839,18 +977,88 @@ func (x *xdg) existing(Target) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	own := filepath.Base(x.desktopPath(Syncthing))
+	own := []string{filepath.Base(x.desktopPath(Syncthing)), filepath.Base(x.desktopPath(Tray))}
 	for _, e := range entries {
 		n := e.Name()
-		lower := strings.ToLower(n)
-		if n == own || !strings.HasSuffix(lower, ".desktop") || !strings.Contains(lower, "syncthing") {
+		if slices.Contains(own, n) || !strings.HasSuffix(strings.ToLower(n), ".desktop") {
 			continue
 		}
-		if on, _ := desktopActive(filepath.Join(x.autostartDir(), n)); on {
+		p := filepath.Join(x.autostartDir(), n)
+		data, err := os.ReadFile(p)
+		if err != nil || !runsSyncthing(desktopExecArgv(desktopEntry(data)["Exec"])) {
+			continue
+		}
+		if on, _ := desktopActive(p); on {
 			return "autostart entry " + n, true
 		}
 	}
 	return "", false
+}
+
+// foreignUnit returns an enabled systemd user service, other than the ones
+// SyncThing V2 enabled, whose ExecStart program is syncthing.
+func (x *xdg) foreignUnit() (string, bool) {
+	out, err := x.systemctl("--user", "list-unit-files", "--state=enabled", "--type=service", "--no-legend", "--plain")
+	if err != nil {
+		return "", false
+	}
+	var units []string
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 || !strings.HasSuffix(f[0], ".service") || f[0] == ownUnit {
+			continue
+		}
+		if f[0] == distroUnit && exists(x.dropInPath()) {
+			continue // enabled by SyncThing V2
+		}
+		units = append(units, f[0])
+	}
+	if len(units) == 0 {
+		return "", false
+	}
+	// One call for all units. A unit that cannot be shown makes systemctl
+	// fail, but the others are still printed.
+	cat, _ := x.systemctl(append([]string{"--user", "cat", "--"}, units...)...)
+	progs := unitPrograms(cat)
+	for _, u := range units {
+		for _, p := range progs[u] {
+			if runsSyncthing([]string{p}) {
+				return u, true
+			}
+		}
+	}
+	return "", false
+}
+
+// unitPrograms reads `systemctl cat` output, where each file is headed by a
+// "# /path/name.service" or "# /path/name.service.d/x.conf" line, and returns
+// the ExecStart programs of each unit. An empty ExecStart= in a drop-in
+// resets the list, as it does for systemd.
+func unitPrograms(data []byte) map[string][]string {
+	out := map[string][]string{}
+	unit := ""
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if p, ok := strings.CutPrefix(line, "# /"); ok && (strings.HasSuffix(p, ".service") || strings.HasSuffix(p, ".conf")) {
+			p = "/" + p
+			if dir := path.Dir(p); strings.HasSuffix(dir, ".d") {
+				unit = path.Base(strings.TrimSuffix(dir, ".d"))
+			} else {
+				unit = path.Base(p)
+			}
+			continue
+		}
+		if unit == "" || !strings.HasPrefix(line, "ExecStart=") {
+			continue
+		}
+		if prog := unitExec([]byte(line)); prog != "" {
+			out[unit] = append(out[unit], prog)
+		} else if strings.TrimSpace(strings.TrimPrefix(line, "ExecStart=")) == "" {
+			out[unit] = nil
+		}
+	}
+	return out
 }
 
 func (x *xdg) startService(t Target) (bool, error) {
@@ -939,6 +1147,44 @@ func desktopActive(p string) (bool, error) {
 	return true, nil
 }
 
+// desktopExecArgv splits a desktop entry's Exec value (as desktopEntry
+// returns it) into arguments, undoing what desktopExecArg applies: the
+// string-value escapes, double quotes with backslash escapes, and the
+// doubled "%". Field codes such as %U are kept as they are.
+func desktopExecArgv(exec string) []string {
+	s := strings.NewReplacer(`\\`, `\`, `\s`, " ", `\n`, "\n", `\t`, "\t", `\r`, "\r").Replace(exec)
+	var argv []string
+	var word strings.Builder
+	inWord, quoted := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quoted && c == '\\' && i+1 < len(s):
+			i++
+			word.WriteByte(s[i])
+		case c == '"':
+			quoted, inWord = !quoted, true
+		case !quoted && (c == ' ' || c == '\t' || c == '\n'):
+			if inWord {
+				argv = append(argv, word.String())
+				word.Reset()
+				inWord = false
+			}
+		case c == '%' && i+1 < len(s) && s[i+1] == '%':
+			i++
+			word.WriteByte('%')
+			inWord = true
+		default:
+			word.WriteByte(c)
+			inWord = true
+		}
+	}
+	if inWord {
+		argv = append(argv, word.String())
+	}
+	return argv
+}
+
 // desktopEntry returns the keys of the [Desktop Entry] group.
 func desktopEntry(data []byte) map[string]string {
 	kv := map[string]string{}
@@ -962,10 +1208,29 @@ func desktopEntry(data []byte) map[string]string {
 
 // renderUnit writes stv2-syncthing.service with upstream's user-unit
 // semantics (etc/linux-systemd/user/syncthing.service).
-func renderUnit(argv []string) []byte {
+// snapLauncher reports whether bin starts a snap: it lies under /snap/ or
+// resolves to the snap command (/snap/bin/syncthing is a link to
+// /usr/bin/snap). snap run execs the setuid-root snap-confine, which cannot
+// work under NoNewPrivileges.
+func snapLauncher(bin string) bool {
+	if strings.HasPrefix(filepath.ToSlash(bin), "/snap/") {
+		return true
+	}
+	real, err := filepath.EvalSymlinks(bin)
+	return err == nil && (filepath.Base(real) == "snap" || strings.HasPrefix(filepath.ToSlash(real), "/snap/"))
+}
+
+// renderUnit writes our Syncthing user unit. hardened adds
+// MemoryDenyWriteExecute and NoNewPrivileges, which a snap's launcher cannot
+// run under (see snapLauncher).
+func renderUnit(argv []string, hardened bool) []byte {
 	exec := make([]string, len(argv))
 	for i, a := range argv {
 		exec[i] = systemdArg(a)
+	}
+	hardening := "SystemCallArchitectures=native\n"
+	if hardened {
+		hardening += "MemoryDenyWriteExecute=true\nNoNewPrivileges=true\n"
 	}
 	return []byte(`[Unit]
 Description=Syncthing (started by ` + brand.DisplayName + `)
@@ -984,10 +1249,7 @@ SuccessExitStatus=3 4
 RestartForceExitStatus=3 4
 
 # Hardening
-SystemCallArchitectures=native
-MemoryDenyWriteExecute=true
-NoNewPrivileges=true
-
+` + hardening + `
 [Install]
 WantedBy=default.target
 `)

@@ -3,6 +3,7 @@
 package tray
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/Neutx/syncthing-v2/internal/model"
@@ -37,5 +38,20 @@ func TestShapeOf(t *testing.T) {
 func TestInitialTooltip(t *testing.T) {
 	if got := newTray().(*fyneTray).tip; got != startingTooltip {
 		t.Errorf("initial tooltip %q, want %q", got, startingTooltip)
+	}
+}
+
+// dbusmenu (Linux) hides a single underscore and treats it as an access key,
+// so labels double every underscore there; macOS labels are unchanged.
+func TestMenuText(t *testing.T) {
+	want := map[string]string{"work_docs": "work__docs", "a__b_": "a____b__", "Plain": "Plain", "": ""}
+	for in, linux := range want {
+		exp := in
+		if runtime.GOOS == "linux" {
+			exp = linux
+		}
+		if got := menuText(in); got != exp {
+			t.Errorf("menuText(%q) = %q, want %q", in, got, exp)
+		}
 	}
 }

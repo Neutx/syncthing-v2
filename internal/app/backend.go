@@ -20,6 +20,7 @@ import (
 	"github.com/Neutx/syncthing-v2/internal/model"
 	"github.com/Neutx/syncthing-v2/internal/osutil"
 	"github.com/Neutx/syncthing-v2/internal/pairing"
+	"github.com/Neutx/syncthing-v2/internal/picker"
 	"github.com/Neutx/syncthing-v2/internal/prefs"
 	"github.com/Neutx/syncthing-v2/internal/status"
 	"github.com/Neutx/syncthing-v2/internal/stinstall"
@@ -153,10 +154,14 @@ func (a *App) Action(ctx context.Context, name string, raw json.RawMessage) (any
 		return nil, a.shareFolder(ctx, args)
 	case "pick-folder":
 		p, err := a.pickShareFolder()
+		if errors.Is(err, picker.ErrUnavailable) {
+			// No native picker: the page asks for a typed absolute path.
+			return map[string]any{"path": "", "unavailable": true}, nil
+		}
 		if err != nil {
 			return nil, err
 		}
-		return map[string]string{"path": p}, nil
+		return map[string]any{"path": p}, nil
 	case "accept-folder":
 		return nil, a.acceptFolder(ctx, args)
 	case "decline-folder":

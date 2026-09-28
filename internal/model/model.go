@@ -77,7 +77,10 @@ type Snapshot struct {
 	Pending                  []PendingDevice
 	PendingFolders           []PendingFolder
 	Notices                  []string // one-time prompts: "gui-exposed", "legacy-tray", "tailscale-missing"
-	At                       time.Time
+	// Connecting is true while the tray is still looking for Syncthing after
+	// it started: the Down state is provisional, so no Start action is offered.
+	Connecting bool
+	At         time.Time
 }
 
 // Candidate is a tailnet node that could be paired.

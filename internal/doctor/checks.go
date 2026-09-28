@@ -395,7 +395,7 @@ func checkPlatform(ctx context.Context, env Env, r *results) {
 		} else if has, err := env.FirewallRule(ctx); err != nil {
 			r.skip("the firewall rules could not be read ("+err.Error()+")", "FW001")
 		} else if !has {
-			r.add("FW001", `The Windows Firewall rule "`+install.FirewallRuleName+`" is not present, so Windows may block other devices from connecting to Syncthing. Run "`+brand.BinaryName+` firewall allow" (it asks for administrator rights). Pairing usually still works because only one side needs to accept connections.`)
+			r.add("FW001", `The Windows Firewall rule "`+install.FirewallRuleName+`" is not present, so Windows may block other devices from connecting to Syncthing. Run "`+brand.BinaryName+` firewall allow" (it asks for administrator rights). Pairing needs it: other devices check a pairing request from this computer by connecting back to it on port 22000.`)
 		}
 		if env.WebView2 == nil {
 			r.skip("no WebView2 detector", "UI001")

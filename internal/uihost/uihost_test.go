@@ -193,6 +193,38 @@ func TestPlaceRect(t *testing.T) {
 	}
 }
 
+// The page scales its entrance from the corner the dashboard was placed in.
+func TestTrayCorner(t *testing.T) {
+	fhd := image.Rect(0, 0, 1920, 1080)
+	for _, c := range []struct {
+		name string
+		work image.Rectangle
+		want string
+	}{
+		{"bottom taskbar", image.Rect(0, 0, 1920, 1040), "br"},
+		{"top taskbar", image.Rect(0, 40, 1920, 1080), "tr"},
+		{"left taskbar", image.Rect(60, 0, 1920, 1080), "bl"},
+		{"right taskbar", image.Rect(0, 0, 1860, 1080), "br"},
+		{"auto-hide taskbar", fhd, "br"},
+		{"no work area", image.Rectangle{}, "br"},
+	} {
+		if got := trayCorner(fhd, c.work); got != c.want {
+			t.Errorf("%s: trayCorner = %q, want %q", c.name, got, c.want)
+		}
+		// The corner matches where placeRect put the dashboard.
+		r, _ := placeRect(fhd, c.work, 96, DashboardSize)
+		work := c.work
+		if work.Empty() {
+			work = fhd
+		}
+		top, left := r.Min.Y-work.Min.Y < work.Max.Y-r.Max.Y, r.Min.X-work.Min.X < work.Max.X-r.Max.X
+		want := map[[2]bool]string{{false, false}: "br", {true, false}: "tr", {false, true}: "bl", {true, true}: "tl"}[[2]bool{top, left}]
+		if want != c.want {
+			t.Errorf("%s: placeRect put the dashboard at %v (%s), not in corner %s", c.name, r, want, c.want)
+		}
+	}
+}
+
 func TestPlace(t *testing.T) {
 	r, scale := Place(DashboardSize)
 	if scale < 1 || r.Dx() <= 0 || r.Dy() <= 0 {

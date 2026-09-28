@@ -62,7 +62,7 @@ The product name is a **working name** pending the maintainer's final confirmati
   - QR or code pairing
   - `.rpm`
   - AppImage
-  - a Windows arm64 native build (x64 runs under emulation)
+  - a Windows arm64 native build (x64 runs under emulation on Windows 11 on Arm)
   - Authenticode or Apple notarization (the pipeline has pre-wired conditional steps, but 1.0 ships unsigned)
   - auto-downloading SyncThing V2 updates (1.0 only *notifies*)
   - mobile platforms
@@ -635,16 +635,18 @@ Discovery runs **only** at tray startup (once), when the Pair view opens, and wh
 
 `stinstall.Detect` uses the first match:
 
-1. The executable path of a running `syncthing` process. Windows uses `QueryFullProcessImageNameW`; macOS and Linux use `/proc` or `ps -axo pid=,comm=`.
+1. The executable path of a running `syncthing` process of the current user. Windows uses `QueryFullProcessImageNameW` (other users' processes cannot be opened); Linux uses `/proc` (other users' `exe` links cannot be read), and a binary inside a snap (`/snap/<name>/<rev>/…`) is reported as its launcher `/snap/bin/<name>`; macOS uses `ps -axo pid=,uid=,comm=` and keeps only rows with the current uid.
 2. `syncthing` on PATH.
 3. **Known paths:**
    - Windows: `%LOCALAPPDATA%\Programs\Syncthing\syncthing.exe`, scoop `%USERPROFILE%\scoop\shims\syncthing.exe`, and winget `%LOCALAPPDATA%\Microsoft\WinGet\Links\syncthing.exe`
-   - macOS: `/opt/homebrew/bin/syncthing`, `/usr/local/bin/syncthing`, `/Applications/Syncthing.app/Contents/Resources/syncthing/syncthing`
-   - Linux: `/usr/bin/syncthing`, `~/.local/bin/syncthing`, `/snap/bin/syncthing`
+   - macOS: `/opt/homebrew/bin/syncthing`, `/usr/local/bin/syncthing`, `/Applications/Syncthing.app/Contents/Resources/syncthing/syncthing`, MacPorts `/opt/local/bin/syncthing`, Nix `~/.nix-profile/bin/syncthing`
+   - Linux: `/usr/bin/syncthing`, `~/.local/bin/syncthing`, `/snap/bin/syncthing`, `/usr/local/bin/syncthing`, Linuxbrew `/home/linuxbrew/.linuxbrew/bin/syncthing` and `~/.linuxbrew/bin/syncthing`, Nix `~/.nix-profile/bin/syncthing`
 4. **The managed location,** where SyncThing V2 installs it (`Managed = true`):
    - Windows: `%LOCALAPPDATA%\Programs\SyncThingV2\syncthing\syncthing.exe`
    - macOS: `~/Library/Application Support/SyncThingV2/syncthing/syncthing`
    - Linux: `~/.local/share/syncthing-v2/syncthing/syncthing`
+
+On macOS and Linux every candidate must be a regular file owned by root or the current user and writable by neither group nor others; anything else could be replaced by another local user and is skipped.
 
 **An adopted Syncthing** (found by steps 1–3) is never modified: not its binary, not its config, not its autostart. SyncThing V2 only reads and uses it. The one exception is an action the user confirms (the GUI-exposure fix, a profile change, or pair and share operations).
 
@@ -670,13 +672,15 @@ Discovery runs **only** at tray startup (once), when the Pair view opens, and wh
 |---|---|---|
 | Windows | HKCU `...\CurrentVersion\Run` value `SyncThingV2` = `"<install>\stv2.exe" --background` | HKCU Run value `SyncThingV2-Syncthing` = `"<bin>" serve --no-console --no-browser` |
 | macOS | `~/Library/LaunchAgents/io.github.neutx.syncthingv2.plist` (RunAtLoad, `--background`) | `~/Library/LaunchAgents/io.github.neutx.syncthingv2.syncthing.plist` (RunAtLoad, KeepAlive, `serve --no-browser --no-restart`, log to `~/Library/Logs/SyncThingV2/syncthing.log`) |
-| Linux | `~/.config/autostart/stv2.desktop` (`Exec=stv2 --background`) | For a distro binary with `/usr/lib/systemd/user/syncthing.service`: `systemctl --user enable --now syncthing.service`. For a managed binary: `~/.config/systemd/user/stv2-syncthing.service` (upstream template semantics: `Restart=on-failure`, `SuccessExitStatus=3 4`, `RestartForceExitStatus=3 4`). If `systemctl --user` is unavailable: `~/.config/autostart/stv2-syncthing.desktop` (`serve --no-browser`, without `--no-restart`, because nothing supervises it). |
+| Linux | `~/.config/autostart/stv2.desktop` (`Exec=stv2 --background`) | For a distro binary with `/usr/lib/systemd/user/syncthing.service`: `systemctl --user enable syncthing.service` (not `--now`: the Syncthing it runs is normally already running, and a second instance would fail on the database lock). For a managed binary: `~/.config/systemd/user/stv2-syncthing.service` (upstream template semantics: `Restart=on-failure`, `SuccessExitStatus=3 4`, `RestartForceExitStatus=3 4`). If `systemctl --user` is unavailable: `~/.config/autostart/stv2-syncthing.desktop` (`serve --no-browser`, without `--no-restart`, because nothing supervises it). |
 
 - **Detecting an existing autostart:** `autostart.Existing` recognises the following, and reports them as "Syncthing starts at login (configured outside SyncThing V2)" with the toggle shown read-only:
   - Windows Startup-folder `.lnk` files whose target is `syncthing.exe`
   - other HKCU Run values that reference `syncthing`
-  - `~/Library/LaunchAgents/*syncthing*.plist`
-  - enabled user units named `syncthing*.service`
+  - `~/Library/LaunchAgents/*.plist` whose program (`Program`, or the first `ProgramArguments` entry, also inside an `sh -c` or `env` wrapper) is named `syncthing`; a binary plist counts when its file name contains `syncthing`
+  - enabled systemd user services (any name, such as Linuxbrew's `homebrew.syncthing.service`) whose `ExecStart` program is named `syncthing`, read through `systemctl --user cat`
+  - active XDG autostart entries whose `Exec` program is named `syncthing`
+  - the enabled system unit `syncthing@<user>.service`
 - **When it is safe to write:** SyncThing V2 creates or removes a Syncthing entry only when it owns that entry.
 
 ### 5.4 Security audit prompt for adopted configs
@@ -729,12 +733,12 @@ If `stclient.Audit` finds SEC001, a one-time notice (with a dashboard banner and
   - stops the tray
   - removes the Run values that SyncThing V2 owns, the Start Menu shortcut, the Uninstall key and `%LOCALAPPDATA%\SyncThingV2` (prefs, logs, WebView2 data)
   - asks whether to also remove the **managed** Syncthing binary and its autostart. It never deletes Syncthing's config, database or synced folders.
-  - self-deletes with a detached hidden `cmd.exe /c ping -n 3 127.0.0.1 >nul & rmdir /s /q "<install dir>"`
+  - self-deletes with a detached hidden `cmd.exe /d /v:off /s /c ""<system dir>\PING.EXE" -n 3 127.0.0.1 >nul & rmdir /s /q "<install dir>""`, run from the system directory; `ping` is named by its full path so a `ping.bat` planted in the working directory can never run
 - **Exe resources** come from `go-winres` using `packaging/windows/winres.json`:
   - the icon (`assets/icons`)
   - version info
   - `app.manifest`: `asInvoker`, PerMonitorV2 DPI awareness, Common Controls v6, `supportedOS` Windows 10/11
-- **Supported:** Windows 10 1809+ and Windows 11, x64. Arm64 runs the x64 build under emulation.
+- **Supported:** Windows 10 1809+ and Windows 11, x64. Windows 11 on Arm runs the x64 build under x64 emulation; Windows 10 on Arm cannot (it emulates 32-bit x86 only).
 
 ### 6.2 macOS
 
@@ -824,9 +828,9 @@ If `stclient.Audit` finds SEC001, a one-time notice (with a dashboard banner and
 **Script** (PowerShell 5.1 compatible, fewer than 100 lines, `Set-StrictMode -Version Latest`, `$ErrorActionPreference='Stop'`):
 
 1. Set TLS 1.2 again, for when the script is run directly.
-2. `$ver` is baked in at release time (the placeholder `__STV2_VERSION__` is replaced by `release.yml`). `$env:STV2_VERSION` overrides it.
+2. `$ver` is baked in at release time (`release.yml` replaces the literal token `__STV2_VERSION__` with the release version). `$env:STV2_VERSION` overrides it.
 3. `$base` defaults to `https://github.com/Neutx/syncthing-v2/releases/download/v$ver`. `$env:STV2_BASE_URL` overrides it (used by CI).
-4. Refuse to run on 32-bit Windows. On arm64, print "running x64 build under emulation".
+4. Refuse to run on 32-bit Windows. On arm64, refuse builds below 22000 (Windows 10 on Arm has no x64 emulation), otherwise print "running x64 build under emulation".
 5. Download `SyncThingV2-Setup-$ver-windows-x64.exe` and `SHA256SUMS.txt` into a new `%TEMP%\stv2-<guid>` directory with `Invoke-WebRequest -UseBasicParsing`.
 6. Compare `Get-FileHash -Algorithm SHA256` with the matching line. On mismatch, throw and delete the directory.
 7. Run `Unblock-File`, then `& $exe install --yes`. Check `$LASTEXITCODE`.
@@ -978,7 +982,7 @@ All workflows follow the same rules:
 |---|---|---|
 | lint | ubuntu-latest | `gofmt -l` is empty; `go vet ./...`; staticcheck; govulncheck; `go mod tidy -diff`; shellcheck (`scripts/*.sh`, `packaging/**/*.sh`); actionlint; gitleaks (full history); `scripts/privacy-check.sh` with the `PRIVACY_DENYLIST` secret (skipped with a notice on forks where the secret is absent) |
 | lint-ps | windows-latest | PSScriptAnalyzer on `scripts/*.ps1` (Error severity fails) |
-| test | matrix windows-latest, ubuntu-latest, macos-14 | `go test -race ./...` (includes the hover lint, device-ID vectors, policy truth table, the probe against an in-process TLS server, and the fake-REST engine tests) |
+| test | matrix windows-latest, ubuntu-latest, macos-15 | `go test -race ./...` (includes the hover lint, device-ID vectors, policy truth table, the probe against an in-process TLS server, and the fake-REST engine tests) |
 | e2e | matrix ubuntu-latest, windows-latest | `go test -tags e2e -timeout 15m ./e2e/...` |
 | build | matrix: the three OSes | `scripts/build.sh` / `scripts/build.ps1` smoke build; upload the artifacts |
 | installer-test | matrix: the three OSes; needs build | Serve the artifacts with `python -m http.server 8000`. Run the one-liner against `STV2_BASE_URL=http://127.0.0.1:8000`. On Windows it runs inside `powershell -NoProfile -ExecutionPolicy Restricted -Command "<exact documented one-liner, URL swapped>"`. Then check: `stv2 version`; `stv2 doctor --json`, whose `install.*` checks must pass (Tailscale checks are expected to fail on runners and are ignored); the autostart entry exists; `stv2 uninstall --yes` removes it. |
@@ -992,7 +996,7 @@ All workflows follow the same rules:
 3. **build-linux** (ubuntu-latest):
    - `CGO_ENABLED=0 GOARCH={amd64,arm64}` builds, packed into tarballs
    - `go run github.com/goreleaser/nfpm/v2/cmd/nfpm@<pin> package -p deb` for each arch
-4. **build-macos** (macos-14):
+4. **build-macos** (macos-15):
    - two cgo builds (arm64 native; amd64 with `CC="clang -arch x86_64"`), `lipo -create`
    - `packaging/macos/make-app.sh` (Info.plist, icns, ad-hoc codesign)
    - `make-dmg.sh`, plus the tarball

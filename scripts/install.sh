@@ -62,6 +62,11 @@ done
 if [ "$(id -u)" -eq 0 ] && [ "$allow_root" -ne 1 ]; then
     die "do not run this as root; it installs for the current user. Use --allow-root to override."
 fi
+# stv2 itself refuses root too; pass the override on to "stv2 install".
+if [ "$allow_root" -eq 1 ]; then
+    STV2_ALLOW_ROOT=1
+    export STV2_ALLOW_ROOT
+fi
 if [ -z "${HOME:-}" ] || [ ! -d "$HOME" ]; then
     die "HOME is not set to an existing directory"
 fi

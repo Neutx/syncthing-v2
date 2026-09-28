@@ -35,6 +35,7 @@ const DynamicAddress = "dynamic"
 // Errors returned by Service.
 var (
 	// ErrTailscaleNotRunning: Tailscale is installed but not connected and logged in.
+	//lint:ignore ST1005 "Tailscale" is a proper noun and this text is shown to users.
 	ErrTailscaleNotRunning = errors.New("Tailscale is not connected")
 	// ErrNotVerified: Accept was called for a request that did not pass Policy.Decide.
 	ErrNotVerified = errors.New("this pairing request was not verified over Tailscale")

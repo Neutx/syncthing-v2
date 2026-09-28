@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -188,6 +190,71 @@ func TestRunUsageErrors(t *testing.T) {
 	} {
 		if code := run(args); code != exitUsage {
 			t.Errorf("run(%q) = %d, want %d", args, code, exitUsage)
+		}
+	}
+}
+
+// stubTray replaces the tray for one test and records the modes it runs in.
+func stubTray(t *testing.T) *[]string {
+	t.Helper()
+	var modes []string
+	old := trayMain
+	trayMain = func(mode string) int { modes = append(modes, mode); return exitOK }
+	t.Cleanup(func() { trayMain = old })
+	return &modes
+}
+
+func TestDropLaunchServicesArgs(t *testing.T) {
+	for _, tc := range []struct {
+		goos string
+		in   []string
+		want []string
+	}{
+		{"darwin", []string{"-psn_0_12345"}, []string{}},
+		{"darwin", []string{"-psn_0_12345", "--background"}, []string{"--background"}},
+		{"darwin", []string{"--setup", "-psn_0_1"}, []string{"--setup"}},
+		{"darwin", []string{"doctor", "--json"}, []string{"doctor", "--json"}},
+		{"darwin", nil, nil},
+		{"linux", []string{"-psn_0_12345"}, []string{"-psn_0_12345"}},
+		{"windows", []string{"-psn_0_12345"}, []string{"-psn_0_12345"}},
+	} {
+		in := slices.Clone(tc.in)
+		got := dropLaunchServicesArgs(tc.goos, in)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("dropLaunchServicesArgs(%q, %q) = %q, want %q", tc.goos, tc.in, got, tc.want)
+		}
+		if !slices.Equal(in, tc.in) {
+			t.Errorf("dropLaunchServicesArgs(%q, %q) changed its input to %q", tc.goos, tc.in, in)
+		}
+	}
+}
+
+// TestRunLaunchServicesArg: a Finder launch on macOS passes -psn_…, which
+// must start the tray. Elsewhere it stays an unknown command.
+func TestRunLaunchServicesArg(t *testing.T) {
+	modes := stubTray(t)
+	code := run([]string{"-psn_0_12345"})
+	if runtime.GOOS == "darwin" {
+		if code != exitOK || !slices.Equal(*modes, []string{""}) {
+			t.Errorf("run(-psn_0_12345) = %d, tray modes %q; want %d and one tray run", code, *modes, exitOK)
+		}
+	} else if code != exitUsage || len(*modes) != 0 {
+		t.Errorf("run(-psn_0_12345) on %s = %d, tray modes %q; want %d and no tray", runtime.GOOS, code, *modes, exitUsage)
+	}
+
+	// The filtered darwin arguments take the tray path on every OS.
+	*modes = nil
+	for _, tc := range []struct {
+		args []string
+		mode string
+	}{
+		{[]string{"-psn_0_12345"}, ""},
+		{[]string{"-psn_0_12345", "--background"}, "background"},
+		{[]string{"--setup", "-psn_0_12345"}, "setup"},
+	} {
+		*modes = nil
+		if code := run(dropLaunchServicesArgs("darwin", tc.args)); code != exitOK || !slices.Equal(*modes, []string{tc.mode}) {
+			t.Errorf("run(%q) = %d, tray modes %q; want %d and mode %q", tc.args, code, *modes, exitOK, tc.mode)
 		}
 	}
 }

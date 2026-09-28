@@ -5,16 +5,21 @@
 package picker
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
+// ErrUnavailable means no folder picker is installed (Linux without zenity
+// or kdialog). The caller should let the user type a path instead.
+var ErrUnavailable = errors.New("no folder picker is installed (install zenity or kdialog)")
+
 // Folder asks the user to choose a folder and returns its absolute path. It
-// returns "" with a nil error if the user cancels or no picker is available.
-// title is the prompt; initial, if it is an existing absolute directory, is
-// preselected.
+// returns "" with a nil error if the user cancels, and ErrUnavailable if no
+// picker is installed. title is the prompt; initial, if it is an existing
+// absolute directory, is preselected.
 func Folder(title, initial string) (string, error) {
 	title = strings.TrimSpace(strings.ReplaceAll(title, "\x00", ""))
 	if title == "" {

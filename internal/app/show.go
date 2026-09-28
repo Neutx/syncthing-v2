@@ -50,13 +50,16 @@ func (a *App) Show() { a.ShowView("") }
 
 // Dashboard views the tray opens directly (uihost.ValidView names).
 const (
-	ViewPair    = "pair"
-	ViewWelcome = "welcome"
+	ViewPair     = "pair"
+	ViewWelcome  = "welcome"
+	ViewSettings = "settings"
 )
 
 // ShowView is Show on a given view: ViewPair for "Pair Devices…" and the
 // pairing and folder-offer notifications, ViewWelcome for --setup and the
-// first run. An empty view keeps the page on the view it shows.
+// first run, ViewSettings (which carries the About section) for "About"
+// where there is no native message box. An empty view keeps the page on the
+// view it shows.
 func (a *App) ShowView(view string) {
 	a.showMu.Lock()
 	defer a.showMu.Unlock()

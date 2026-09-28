@@ -145,7 +145,7 @@ func (a *App) connect(ctx context.Context) {
 		case err == nil:
 			inst, found = i, true
 			a.mu.Lock()
-			a.inst, a.instFound = i, true
+			a.setInstLocked(i)
 			a.mu.Unlock()
 			applog.Printf("app: Syncthing %s at %s (managed %v)", i.Version, i.Bin, i.Managed)
 			if ok, msg := stinstall.CheckVersion(i.Version); !ok && i.Version != "" {
@@ -378,7 +378,7 @@ func (a *App) ensureSyncthing(ctx context.Context) error {
 		if i, err := a.detect(ctx); err == nil {
 			found, inst = true, i
 			a.mu.Lock()
-			a.inst, a.instFound = i, true
+			a.setInstLocked(i)
 			a.mu.Unlock()
 		}
 	}
@@ -408,6 +408,7 @@ func (a *App) startSyncthing(ctx context.Context, inst stinstall.Install) error 
 	if _, _, err := a.discover(ctx, inst.Bin); errors.Is(err, stclient.ErrConfigNotFound) {
 		home, herr := syncthingHome()
 		if herr != nil {
+			a.note("Setup failed: "+herr.Error(), status.TintRed)
 			return herr
 		}
 		a.note("Setting up Syncthing", status.TintAmber)
@@ -563,7 +564,7 @@ func (a *App) bootstrap(ctx context.Context) error {
 	}
 	inst := stinstall.Install{Bin: bin, Managed: true, Version: v}
 	a.mu.Lock()
-	a.inst, a.instFound = inst, true
+	a.setInstLocked(inst)
 	a.mu.Unlock()
 
 	setMsg("Starting Syncthing…")
@@ -639,11 +640,34 @@ func (a *App) autoEnabled(t autostart.Target) bool {
 	return on
 }
 
+// autoExisting reports a Syncthing login entry configured outside SyncThing
+// V2. On macOS that includes a Syncthing run from inside another app's
+// bundle (Syncthing.app, also installed by the Homebrew cask): that app
+// starts it at login through its own login item, and a LaunchAgent of ours
+// for the same binary would start a second Syncthing on the same home.
 func (a *App) autoExisting(t autostart.Target) (string, bool) {
+	if t == autostart.Syncthing && goos == "darwin" {
+		if bin := a.stBin.Load(); bin != nil {
+			if app := autostart.AppBundle(*bin); app != "" {
+				return app + " manages Syncthing", true
+			}
+		}
+	}
 	if a.auto == nil {
 		return "", false
 	}
 	return a.auto.Existing(t)
+}
+
+// setInstLocked records the Syncthing installation in use. a.mu must be held.
+func (a *App) setInstLocked(i stinstall.Install) {
+	a.inst, a.instFound = i, true
+	bin := i.Bin
+	a.stBin.Store(&bin)
+}
+
+func (a *App) autoLoaded(t autostart.Target) bool {
+	return a.auto != nil && a.auto.Loaded(t)
 }
 
 func (a *App) autoSet(t autostart.Target, on bool, bin string) error {
@@ -697,6 +721,9 @@ func (a *App) setAutostart(target string, on bool) error {
 		if on && exe == "" {
 			return errors.New("the " + brand.DisplayName + " executable was not found")
 		}
+		if on && goos == "darwin" && install.CheckLoginPath(exe) != nil {
+			return userError("Move " + brand.DisplayName + " to Applications first, then turn this on.")
+		}
 		if err := a.autoSet(autostart.Tray, on, exe); err != nil {
 			return err
 		}
@@ -711,13 +738,16 @@ func (a *App) setAutostart(target string, on bool) error {
 		if on && (!found || bin == "") {
 			return userError("Syncthing was not found on this computer")
 		}
+		// Removing our entry unloads the launchd job, which stops the
+		// Syncthing it runs, but only when launchd has it loaded. A job
+		// written this session for a Syncthing started detached is not.
+		restart := !on && own && found && autostartOffStopsSyncthing && a.autoLoaded(autostart.Syncthing)
 		if err := a.autoSet(autostart.Syncthing, on, bin); err != nil {
 			return err
 		}
-		if !on && own && found && autostartOffStopsSyncthing {
-			// Removing our entry unloaded the launchd job, which stopped
-			// the Syncthing it ran. Start it again unsupervised so syncing
-			// goes on; the toggle only concerns the next login.
+		if restart {
+			// Start Syncthing again unsupervised so syncing goes on; the
+			// toggle only concerns the next login.
 			if err := a.startST(bin); err != nil {
 				return fmt.Errorf("restarting Syncthing after turning its login entry off: %w", err)
 			}

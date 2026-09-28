@@ -287,7 +287,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-14]
+        os: [windows-latest, ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -331,7 +331,7 @@ jobs:
             platform: windows
           - os: ubuntu-latest
             platform: linux
-          - os: macos-14
+          - os: macos-15
             platform: macos
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -397,12 +397,14 @@ jobs:
             platform: windows
           - os: ubuntu-latest
             platform: linux
-          - os: macos-14
+          - os: macos-15
             platform: macos
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
       STV2_BASE_URL: http://127.0.0.1:8000
+      # GitHub's Windows runners run elevated; installer and tray refuse that without this.
+      STV2_ALLOW_ADMIN: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

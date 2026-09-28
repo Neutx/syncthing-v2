@@ -15,6 +15,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -147,12 +148,18 @@ func knownPaths(goos string, getenv func(string) string, home func() (string, er
 			"/opt/homebrew/bin/syncthing",
 			"/usr/local/bin/syncthing",
 			"/Applications/Syncthing.app/Contents/Resources/syncthing/syncthing",
+			"/opt/local/bin/syncthing", // MacPorts
+			join(h, ".nix-profile", "bin", "syncthing"),
 		}
 	default:
 		return []string{
 			"/usr/bin/syncthing",
 			join(h, ".local", "bin", "syncthing"),
 			"/snap/bin/syncthing",
+			"/usr/local/bin/syncthing",
+			"/home/linuxbrew/.linuxbrew/bin/syncthing",
+			join(h, ".linuxbrew", "bin", "syncthing"),
+			join(h, ".nix-profile", "bin", "syncthing"),
 		}
 	}
 }
@@ -168,6 +175,7 @@ type detector struct {
 	version   func(ctx context.Context, bin string) string
 	config    func(ctx context.Context, bin string) string
 	autostart func() bool
+	resolve   func(path string) (string, error) // filepath.EvalSymlinks
 }
 
 func defaultDetector() detector {
@@ -177,10 +185,11 @@ func defaultDetector() detector {
 		home:      osutil.HomeDir,
 		running:   runningSyncthing,
 		lookPath:  exec.LookPath,
-		isFile:    isRegular,
+		isFile:    trustedBin,
 		version:   BinVersion,
 		config:    configPath,
 		autostart: syncthingAutostartExists,
+		resolve:   filepath.EvalSymlinks,
 	}
 }
 
@@ -194,7 +203,7 @@ func (d detector) detect(ctx context.Context) (Install, error) {
 	var in Install
 	for _, p := range d.running(ctx) {
 		if p = d.usable(p); p != "" {
-			in.Bin, in.Running = p, true
+			in.Bin, in.Running = d.stableLink(p), true
 			break
 		}
 	}
@@ -224,12 +233,49 @@ func (d detector) detect(ctx context.Context) (Install, error) {
 	in.Managed = managedBin != "" && samePath(d.goos, in.Bin, managedBin)
 	in.Version = d.version(ctx, in.Bin)
 	in.ConfigPath = d.config(ctx, in.Bin)
-	in.AutostartExists = d.autostart()
+	// A Syncthing inside another app's bundle (Syncthing.app) is started at
+	// login by that app's own login item.
+	in.AutostartExists = d.autostart() || (d.goos == "darwin" && autostart.AppBundle(in.Bin) != "")
 	return in, nil
 }
 
+// versioned reports whether p lies in a package manager's versioned store,
+// which the next upgrade or garbage collection deletes: Homebrew's Cellar
+// (Linuxbrew and macOS) and the Nix store.
+func versioned(p string) bool {
+	s := filepath.ToSlash(p)
+	return strings.Contains(s, "/nix/store/") || strings.Contains(s, "/Cellar/")
+}
+
+// stableLink maps a running Syncthing's resolved executable (Linux reads it
+// from /proc/<pid>/exe, which follows symlinks) back to the stable symlink
+// that points at it, such as /home/linuxbrew/.linuxbrew/bin/syncthing or
+// ~/.nix-profile/bin/syncthing, so that login entries survive the next
+// upgrade. It returns bin unchanged when bin is not in a versioned store or
+// no candidate on PATH or in the known locations resolves to it.
+func (d detector) stableLink(bin string) string {
+	if !versioned(bin) || d.resolve == nil {
+		return bin
+	}
+	var cands []string
+	if p, err := d.lookPath(exeName(d.goos)); err == nil {
+		cands = append(cands, p)
+	}
+	cands = append(cands, knownPaths(d.goos, d.getenv, d.home)...)
+	for _, c := range cands {
+		c = d.usable(c)
+		if c == "" || versioned(c) {
+			continue
+		}
+		if real, err := d.resolve(c); err == nil && samePath(d.goos, real, bin) {
+			return c
+		}
+	}
+	return bin
+}
+
 // usable returns the cleaned absolute path when p is an existing regular
-// file, and "" otherwise.
+// file that is safe to run as this user (see trustedBin), and "" otherwise.
 func (d detector) usable(p string) string {
 	if p == "" {
 		return ""
@@ -289,8 +335,10 @@ func syncthingAutostartExists() bool {
 
 // procSyncthing scans a /proc tree for processes whose executable is named
 // syncthing. Processes of other users whose exe link cannot be read are
-// skipped.
-func procSyncthing(ctx context.Context, proc string) []string {
+// skipped. A Syncthing running from inside a snap is reported as its
+// /snap/bin launcher (see snapLauncher), and skipped when isFile reports that
+// the launcher does not exist.
+func procSyncthing(ctx context.Context, proc string, isFile func(string) bool) []string {
 	entries, err := os.ReadDir(proc)
 	if err != nil {
 		return nil
@@ -314,22 +362,53 @@ func procSyncthing(ctx context.Context, proc string) []string {
 		// After a self-upgrade the old image is unlinked; its path still
 		// names the binary that now sits there.
 		exe = strings.TrimSuffix(exe, " (deleted)")
-		if filepath.Base(exe) == "syncthing" {
-			out = append(out, exe)
+		if path.Base(exe) != "syncthing" {
+			continue
 		}
+		if launcher, isSnap := snapLauncher(exe); isSnap {
+			if !isFile(launcher) {
+				continue
+			}
+			exe = launcher
+		}
+		out = append(out, exe)
 	}
 	return out
 }
 
-// parsePS parses `ps -axo pid=,comm=` output and returns the absolute paths
-// whose base name is syncthing.
-func parsePS(out []byte) []string {
+// snapLauncher maps an executable inside a snap (/snap/<name>/<revision>/...)
+// to the snap's launcher /snap/bin/<name>. Run directly, the inner binary
+// lacks the snap's confinement and environment, so it looks for its config in
+// the wrong place, and its revision directory disappears on the next snap
+// refresh. isSnap is false for paths outside /snap.
+func snapLauncher(exe string) (launcher string, isSnap bool) {
+	exe = path.Clean(exe)
+	rest, ok := strings.CutPrefix(exe, "/snap/")
+	if !ok {
+		return "", false
+	}
+	name, _, _ := strings.Cut(rest, "/")
+	if name == "bin" { // already a launcher
+		return exe, true
+	}
+	return "/snap/bin/" + name, true
+}
+
+// parsePS parses `ps -axo pid=,uid=,comm=` output and returns the absolute
+// paths whose base name is syncthing, of processes run by uid. A syncthing
+// that another user runs is never adopted: its binary is theirs to replace.
+func parsePS(out []byte, uid int) []string {
+	want := strconv.Itoa(uid)
 	var paths []string
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
-		pid, comm, ok := strings.Cut(line, " ")
+		pid, rest, ok := strings.Cut(line, " ")
 		if !ok || !isPID(pid) {
+			continue
+		}
+		owner, comm, ok := strings.Cut(strings.TrimSpace(rest), " ")
+		if !ok || owner != want {
 			continue
 		}
 		comm = strings.TrimSpace(comm)

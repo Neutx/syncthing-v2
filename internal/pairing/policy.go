@@ -23,6 +23,7 @@ const (
 	ReasonSameOwner     = "same owner"
 	ReasonNoPendingAddr = "no address"
 	ReasonNoPendingID   = "no device ID"
+	ReasonSelf          = "this computer"
 )
 
 // Policy decides which pending devices may be shown as pairing prompts.
@@ -43,10 +44,12 @@ type Decision struct {
 // Decide is a pure function of its inputs:
 //
 //  1. the pending address must be inside Prefixes, else ignore ("not from tailnet");
-//  2. a node in ts must own that address, else ignore ("unknown tailnet node");
-//  3. the probe of that address must have succeeded and returned exactly the
+//  2. an address of this computer itself is ignored ("this computer"): any
+//     local process or account can connect from it, so it proves nothing;
+//  3. a peer in ts must own that address, else ignore ("unknown tailnet node");
+//  4. the probe of that address must have succeeded and returned exactly the
 //     pending device ID, else ignore ("identity not verified" or "identity mismatch");
-//  4. otherwise prompt, with reason "same owner" or "other owner".
+//  5. otherwise prompt, with reason "same owner" or "other owner".
 func (p Policy) Decide(pd model.PendingDevice, ts tailnet.Status, probedID string, probeErr error) Decision {
 	if pd.DeviceID == "" {
 		return Decision{Action: ActionIgnore, Reason: ReasonNoPendingID}
@@ -57,6 +60,10 @@ func (p Policy) Decide(pd model.PendingDevice, ts tailnet.Status, probedID strin
 	ip := pd.Addr.Addr().Unmap().WithZone("")
 	if !p.contains(ip) {
 		return Decision{Action: ActionIgnore, Reason: ReasonNotTailnet}
+	}
+	if ts.SelfHasIP(ip) {
+		self := ts.Self
+		return Decision{Action: ActionIgnore, Reason: ReasonSelf, Node: &self}
 	}
 	n, ok := ts.FindByIP(ip)
 	if !ok {

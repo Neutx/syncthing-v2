@@ -54,7 +54,11 @@ The same rule in the older **`acls`** syntax:
 
 ## 4. Shields Up and "Allow incoming connections"
 
-Tailscale's **Shields Up** setting (on macOS and Windows, "Allow incoming connections" turned off) blocks every incoming connection to that computer, including Syncthing's. One such computer is fine. Pairing and sync need only one of the two computers to accept connections, because each side stores the other's address and either side may dial. The discovery probe also needs to reach the other computer, though. A computer with Shields Up therefore shows up in the Pair view as not having Syncthing, and you pair it from its own side instead. If both computers have Shields Up on, they cannot connect.
+Tailscale's **Shields Up** setting (on macOS and Windows, "Allow incoming connections" turned off) blocks every incoming connection to that computer, including Syncthing's.
+
+Pairing through SyncThing V2 needs **both** computers to accept connections on port 22000. The computer where you click **Pair** knocks on the other one to find it, and the computer where you click **Accept** knocks back to check the request. A computer with Shields Up therefore shows up in the Pair view as not having Syncthing, and a request it sends is never shown on the other side. Turn Shields Up off on both computers while you pair, or [pair by hand](pairing.md#manual-fallback-pairing-in-syncthings-web-ui).
+
+After pairing, one computer with Shields Up is fine for sync, because each side stores the other's address and either side may connect. If both computers have Shields Up on, they cannot connect.
 
 ## 5. MagicDNS is not required
 

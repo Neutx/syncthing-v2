@@ -448,6 +448,16 @@ body.mode-browser .backdrop {
   padding: 40px; text-align: center;
   background: rgba(10, 11, 15, 0.86);
 }
+.path-entry { padding: 24px; }
+.path-card { width: 100%; max-width: 380px; padding: 12px 15px; text-align: left; }
+.path-card .set-help { padding: 0; margin-top: 4px; }
+.path-input {
+  display: block; width: 100%; margin-top: 10px; padding: 6px 9px;
+  border-radius: 8px; border: 1px solid var(--card-rim);
+  background: rgba(0, 0, 0, 0.28); color: var(--fg);
+  user-select: text; -webkit-user-select: text;
+}
+.path-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }

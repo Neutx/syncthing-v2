@@ -10,6 +10,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"net/netip"
@@ -21,6 +22,7 @@ import (
 
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -89,6 +91,7 @@ type autostarter interface {
 	Enabled(t autostart.Target) (bool, error)
 	Existing(t autostart.Target) (string, bool)
 	Set(t autostart.Target, on bool, bin string, args []string) error
+	Loaded(t autostart.Target) bool
 }
 
 // App is the running tray application.
@@ -116,6 +119,8 @@ type App struct {
 	readConfig  func(path string) (stclient.Endpoint, stclient.GUIConfig, error)
 	roots       func() (install.Roots, error)
 	hasSNI      func() bool
+	sniWait     time.Duration // how long a missing tray host is waited for (UI002)
+	sniPoll     time.Duration
 	newEngine   func(c *stclient.Client, startup func() model.Startup) engine
 	startST     func(bin string) error
 	allowFW     func(ctx context.Context, bin string) error
@@ -134,7 +139,8 @@ type App struct {
 	sess        *session
 	inst        stinstall.Install
 	instFound   bool
-	base        model.Snapshot // latest engine snapshot of sess
+	stBin       atomic.Pointer[string] // inst.Bin, readable without mu (see autoExisting)
+	base        model.Snapshot         // latest engine snapshot of sess
 	haveBase    bool
 	downReason  string // Detail of the synthetic Down snapshot (no session)
 	notes       []model.ActivityItem
@@ -228,6 +234,8 @@ func newApp(opts Options, p *prefs.Store, dataDir string) *App {
 		readConfig:  stclient.ReadConfig,
 		roots:       install.DefaultRoots,
 		hasSNI:      notify.HasStatusNotifierWatcher,
+		sniWait:     30 * time.Second,
+		sniPoll:     time.Second,
 		startST:     func(bin string) error { return stinstall.Start(bin) },
 		allowFW:     install.AllowFirewall,
 		hasFW:       install.HasFirewallRule,
@@ -370,7 +378,10 @@ func Run(opts Options) error {
 		}
 	}()
 
-	a.publish() // the tray starts with a real state instead of an empty tooltip
+	// The dashboard gets a "Connecting" snapshot at once; the tray keeps its
+	// neutral icon and "starting" tooltip until the first look for Syncthing
+	// has finished (see decidedLocked).
+	a.publish()
 	a.tray.Run(func() { a.start() }, func() { go a.Show() }, a.onMenu)
 
 	// Exit (F7): stop the engine, the server and the host. Syncthing keeps running.
@@ -400,19 +411,58 @@ func (a *App) start() {
 // openOnStart opens the dashboard as the tray starts: not in the autostart
 // mode unless there is no tray icon to click (UI002), and on the welcome view
 // for --setup and the first run (§6.1, §6.2).
+//
+// At login the tray often starts before the panel or the GNOME AppIndicator
+// extension has claimed the StatusNotifierWatcher name, and the icon appears
+// once it does. So a missing watcher is only reported after waiting up to
+// sniWait for it; in the autostart mode the dashboard also waits.
 func (a *App) openOnStart() {
 	view := ""
 	if a.opts.Setup {
 		view = ViewWelcome
 	}
-	if !a.hasSNI() {
+	if a.hasSNI() {
+		if !a.opts.Background {
+			go a.ShowView(view)
+		}
+		return
+	}
+	if !a.opts.Background {
+		go a.ShowView(view) // the dashboard opens anyway; only the notice waits
+	}
+	a.goRun(func() {
+		if a.waitSNI() {
+			return
+		}
 		// UI002: no StatusNotifierItem host, so the icon is invisible.
-		applog.Printf("app: no StatusNotifierWatcher on the session bus (UI002)")
+		applog.Printf("app: no StatusNotifierWatcher on the session bus after %v (UI002)", a.sniWait)
 		a.notifyFn("No tray icon available",
 			"Your desktop shows no tray icons. "+brand.DisplayName+" opens its dashboard in the browser instead. Run \"stv2 doctor\" (UI002) for help.", nil)
-		go a.ShowView(view)
-	} else if !a.opts.Background {
-		go a.ShowView(view)
+		if a.opts.Background {
+			a.ShowView(view)
+		}
+	})
+}
+
+// waitSNI polls for a StatusNotifierWatcher every sniPoll for up to sniWait.
+// It reports whether one appeared; false also when the app is quitting.
+func (a *App) waitSNI() bool {
+	deadline := time.NewTimer(a.sniWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(a.sniPoll)
+	defer tick.Stop()
+	for {
+		select {
+		case <-a.ctx.Done():
+			return true // quitting: report nothing, open nothing
+		case <-deadline.C:
+			return a.hasSNI()
+		case <-tick.C:
+			if a.hasSNI() {
+				applog.Printf("app: StatusNotifierWatcher appeared")
+				return true
+			}
+		}
 	}
 }
 
@@ -547,12 +597,15 @@ func (a *App) publish() {
 		prev, havePrev = a.prevState, a.havePrev
 		a.prevState, a.havePrev = s.State, true
 	}
+	decided := a.decidedLocked()
 	a.mu.Unlock()
 
 	for _, ch := range subs {
 		offer(ch, s)
 	}
-	a.updateTray(s)
+	if decided {
+		a.updateTray(s)
+	}
 	if havePrev {
 		if title, body, ok := status.NoticeFor(prev, s.State, s); ok {
 			a.notify(title, body)
@@ -603,8 +656,18 @@ func (a *App) snapshotLocked() model.Snapshot {
 	return s
 }
 
+// decidedLocked reports whether the state of Syncthing is known: an engine
+// snapshot arrived, the last look for Syncthing found none (or no config),
+// or Syncthing is being set up. Before that (at launch, and briefly while a
+// new session attaches) the tray keeps what it shows, so a Down state that is
+// only a guess never offers "Start Syncthing".
+func (a *App) decidedLocked() bool {
+	return (a.sess != nil && a.haveBase) || a.downReason != "" || a.bootMsg != ""
+}
+
 // downSnapshotLocked is the snapshot shown while there is no engine: Syncthing
-// is missing, not set up yet, or being downloaded.
+// is missing, not set up yet, or being downloaded. While the state is not yet
+// known (decidedLocked) it says so instead of claiming Syncthing is down.
 func (a *App) downSnapshotLocked() model.Snapshot {
 	s := model.Snapshot{
 		State:     model.StateDown,
@@ -621,13 +684,21 @@ func (a *App) downSnapshotLocked() model.Snapshot {
 	if a.bootMsg != "" {
 		s.Subline, s.Detail = a.bootMsg, a.bootMsg
 	}
-	if s.Detail == "" {
-		s.Detail = "Looking for Syncthing…"
+	if !a.decidedLocked() {
+		s.Connecting = true
+		s.Headline = "Connecting"
+		s.Subline, s.Detail = lookingForSyncthing, lookingForSyncthing
+		s.PeerLine = lookingForSyncthing
+		s.SizeLine = "-"
 	}
 	s.Activity = append([]model.ActivityItem(nil), a.notes...)
 	s.Startup = a.startupCached()
 	return s
 }
+
+// lookingForSyncthing is the Detail of the snapshot before the first look
+// for Syncthing has finished.
+const lookingForSyncthing = "Looking for Syncthing…"
 
 // noticesLocked lists the one-time notices to show.
 func (a *App) noticesLocked() []string {
@@ -746,9 +817,24 @@ func (a *App) handleMenu(id string) {
 	}
 	if err != nil {
 		applog.Printf("app: menu %s: %v", id, err)
-		switch id {
-		case tray.IDRescan, tray.IDPause, tray.IDResume, tray.IDRestart:
-		default:
+		a.menuFailed(id, err)
+	}
+}
+
+// menuFailed reports a failed tray command. The engine commands, the open
+// actions, the folder items and Start Syncthing already note their own
+// failures in Recent Activity, so only what they leave unnoted is noted here.
+// Start and the login toggles also show a notification, since the dashboard
+// that holds the note is usually closed when the tray menu is used.
+func (a *App) menuFailed(id string, err error) {
+	switch id {
+	case tray.IDAutostartTray, tray.IDAutostartSyncthing:
+		a.note(err.Error(), status.TintRed)
+		a.notify(brand.DisplayName, "Startup toggle failed: "+err.Error())
+	case tray.IDStartSyncthing:
+		a.notify("Syncthing", "Start failed: "+err.Error())
+	default:
+		if errors.Is(err, errNoSyncthing) { // refused before anything was noted
 			a.note(err.Error(), status.TintRed)
 		}
 	}
@@ -757,7 +843,7 @@ func (a *App) handleMenu(id string) {
 // about shows the version and the disclaimer.
 func (a *App) about() {
 	if a.opts.Message == nil {
-		a.Show()
+		a.ShowView(ViewSettings)
 		return
 	}
 	a.opts.Message("About "+brand.DisplayName, AboutText())

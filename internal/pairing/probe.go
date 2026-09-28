@@ -38,15 +38,19 @@ var (
 	ErrTimeout = errors.New("connection timed out")
 )
 
-// errProbeDone aborts the TLS handshake right after the server certificate
-// arrives, before the client could send any certificate of its own. The
-// remote Syncthing therefore never learns a device ID from the probe and
-// never records a pending device.
-var errProbeDone = errors.New("probe: server certificate captured")
+// errProbeDone aborts the TLS handshake at the moment the server asks for a
+// client certificate. By then the server has proven it holds the private key
+// of the certificate it presented (its CertificateVerify signature and its
+// Finished message have been checked), and the client has not yet written
+// anything of its own. The remote Syncthing therefore never learns a device
+// ID from the probe and never records a pending device.
+var errProbeDone = errors.New("probe: server identity proven")
 
 // Probe connects to a Syncthing sync listener at ap, reads the server's TLS
-// certificate and returns the device ID derived from it. It never sends a
-// client certificate and never completes the handshake.
+// certificate, checks that the server holds the matching private key, and
+// returns the device ID derived from the certificate. It never sends a
+// client certificate and never completes the handshake with a Syncthing
+// server (which always requests one).
 func Probe(ctx context.Context, ap netip.AddrPort) (string, error) {
 	if !ap.IsValid() {
 		return "", ErrNoSyncthing
@@ -67,27 +71,40 @@ func Probe(ctx context.Context, ap netip.AddrPort) (string, error) {
 		_ = raw.SetDeadline(dl)
 	}
 
-	var der []byte
+	var (
+		der    []byte
+		proved bool
+	)
 	cfg := &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		NextProtos:         []string{"bep/1.0"},
 		InsecureSkipVerify: true, //nolint:gosec // identity is the certificate hash itself, taken below
+		// Called on receipt of the server's Certificate message, before its
+		// CertificateVerify signature is checked: only remember the DER.
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 			if len(rawCerts) > 0 {
 				der = append([]byte(nil), rawCerts[0]...)
 			}
-			return errProbeDone
+			return nil
 		},
-		// Certificates and GetClientCertificate are deliberately left unset.
+		// In TLS 1.3 this runs only after the server's CertificateVerify and
+		// Finished have both been verified, and before the client writes its
+		// own Certificate flight. Aborting here proves key possession without
+		// ever presenting a client certificate. Certificates stays unset.
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			proved = true
+			return nil, errProbeDone
+		},
 	}
 	conn := tls.Client(raw, cfg)
 	herr := conn.HandshakeContext(ctx)
-	if der != nil {
+	// herr == nil: the server asked for no client certificate (Syncthing
+	// always does), but the completed handshake still verified its signature.
+	if der != nil && (proved || herr == nil) {
 		return deviceid.FromCert(der), nil
 	}
 	if herr == nil {
-		// Unreachable with VerifyPeerCertificate returning an error, but
-		// never report success without a certificate.
+		// Never report success without a certificate.
 		return "", ErrNoSyncthing
 	}
 	// The TCP connection was already up, so a refusal cannot happen here;

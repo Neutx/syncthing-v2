@@ -458,6 +458,7 @@ type child struct {
 	launching    bool   // a launch page is loading or posting its login
 	loaded       bool   // the dashboard page (not the launch page) has loaded
 	view         string // a view to switch to once the dashboard has loaded
+	corner       string // the tray corner of the last show (trayCorner), set on the page
 }
 
 // openExternal opens a link the dashboard tried to load in the popup; it is
@@ -650,6 +651,9 @@ func (c *child) run(cmd command) {
 }
 
 func (c *child) show(r image.Rectangle) {
+	procKillTimer.Call(c.hwnd, escTimerID) // shown again during an exit animation
+	c.corner = placedCorner(r)
+	c.applyCorner()
 	w, h := r.Dx(), r.Dy()
 	procSetWindowPos.Call(c.hwnd, hwndTopmost, uintptr(int32(r.Min.X)), uintptr(int32(r.Min.Y)),
 		uintptr(w), uintptr(h), swpNoActivate)
@@ -729,12 +733,34 @@ func (c *child) onWebViewError(err error) {
 	// returns; the tray restarts the host on the next show.
 }
 
-// onKey sees accelerator keys (Esc always counts as one). Esc is left to the
-// page, which plays its exit animation and asks the tray to hide the popup;
-// a timer hides it natively if the page does not.
+// beginHide dismisses the popup the way Esc does (focus lost, Alt+F4): the
+// page plays its exit animation and asks the tray to hide it, and a timer
+// hides it natively if the page does not.
+func (c *child) beginHide() {
+	if !c.visible {
+		return
+	}
+	if !c.loaded {
+		c.hide()
+		return
+	}
+	c.wv.Eval(`window.stv2 && window.stv2.hide()`)
+	armEscTimer(c.hwnd)
+}
+
+// armEscTimer starts the native fallback that hides the popup if the page
+// has not asked to within escGrace. A variable for tests.
+var armEscTimer = func(hwnd uintptr) { procSetTimer.Call(hwnd, escTimerID, escGrace, 0) }
+
+// onKey sees accelerator keys (Esc always counts as one). Once the dashboard
+// has loaded, Esc belongs to the page: it closes a popover or confirmation,
+// goes back to Status from another view, and only on Status plays the exit
+// animation and asks the tray to hide the popup. No native timer is armed,
+// or it would hide the popup after every Esc. Before the dashboard has
+// loaded there is no page to decide, so Esc hides the popup at once.
 func (c *child) onKey(vk uint) bool {
-	if vk == vkEscape && c.visible {
-		procSetTimer.Call(c.hwnd, escTimerID, escGrace, 0)
+	if vk == vkEscape && c.visible && !c.loaded {
+		c.hide()
 	}
 	return false
 }
@@ -753,6 +779,7 @@ func (c *child) onNavigated(sender *edge.ICoreWebView2, _ *edge.ICoreWebView2Nav
 	}
 	if strings.HasPrefix(src, c.serverURL+"/?mode=glass") {
 		c.loaded = true
+		c.applyCorner()
 		c.applyView()
 	}
 }
@@ -922,6 +949,15 @@ func (c *child) leave(uri string, action navAction) {
 	}()
 }
 
+// applyCorner tells the loaded dashboard which corner its entrance scales
+// from. The value comes from trayCorner, so it is safe inside the script.
+func (c *child) applyCorner() {
+	if !c.loaded || c.corner == "" {
+		return
+	}
+	c.wv.Eval(`window.stv2 && window.stv2.corner && window.stv2.corner("` + c.corner + `")`)
+}
+
 // applyView switches the loaded dashboard to the pending view. The name was
 // checked by ValidView, so it is safe inside the script string.
 func (c *child) applyView() {
@@ -944,7 +980,7 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		return 0
 	case wmActivate:
 		if wParam&0xFFFF == waInactive && c.ready {
-			c.hide()
+			c.beginHide()
 		}
 	case wmTimer:
 		if wParam == escTimerID {
@@ -966,7 +1002,7 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		return 0 // the tray sends an explicit size for each show
 	case wmClose:
 		if c.ready {
-			c.hide() // Alt+F4 hides; only "quit" ends the host
+			c.beginHide() // Alt+F4 hides; only "quit" ends the host
 		}
 		return 0
 	case wmDestroy:

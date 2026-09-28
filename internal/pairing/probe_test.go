@@ -174,6 +174,72 @@ func TestBEPServerDetectsClientCertificate(t *testing.T) {
 	}
 }
 
+// A listener that replays someone else's certificate cannot sign the TLS 1.3
+// CertificateVerify for it, so the probe must not return that certificate's
+// device ID.
+func TestProbeRejectsCertificateWithoutKey(t *testing.T) {
+	victim := selfSignedCert(t, "syncthing")
+	impostor := selfSignedCert(t, "syncthing")
+	replayed := tls.Certificate{Certificate: victim.Certificate, PrivateKey: impostor.PrivateKey}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{replayed},
+		MinVersion:   tls.VersionTLS13,
+		NextProtos:   []string{"bep/1.0"},
+		ClientAuth:   tls.RequireAnyClientCert,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+			_ = c.(*tls.Conn).Handshake()
+			c.Close()
+		}
+	}()
+	id, err := Probe(context.Background(), netip.MustParseAddrPort(ln.Addr().String()))
+	if !errors.Is(err, ErrNoSyncthing) {
+		t.Fatalf("Probe(replayed certificate) = %q, %v; want ErrNoSyncthing", deviceid.Short(id), err)
+	}
+}
+
+// A TLS 1.3 server that requests no client certificate completes the
+// handshake, which also verified its signature, so its ID is accepted.
+func TestProbeServerWithoutClientAuth(t *testing.T) {
+	cert := selfSignedCert(t, "syncthing")
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+			_ = c.(*tls.Conn).Handshake()
+			c.Close()
+		}
+	}()
+	id, err := Probe(context.Background(), netip.MustParseAddrPort(ln.Addr().String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := deviceid.FromCert(cert.Certificate[0]); id != want {
+		t.Fatalf("Probe = %s, want %s", deviceid.Short(id), deviceid.Short(want))
+	}
+}
+
 func TestProbeRefused(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

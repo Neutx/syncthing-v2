@@ -9,6 +9,7 @@ import (
 
 	"fyne.io/systray"
 
+	"github.com/Neutx/syncthing-v2/internal/brand"
 	"github.com/Neutx/syncthing-v2/internal/icon"
 	"github.com/Neutx/syncthing-v2/internal/model"
 )
@@ -68,12 +69,20 @@ func (t *fyneTray) Run(onReady func(), _ func(), onMenu func(id string)) {
 	t.onMenu = onMenu
 	t.mu.Unlock()
 
+	if runtime.GOOS == "linux" {
+		// The StatusNotifierItem Id is taken from the title when systray
+		// exports the item, so it must be set before Run. Without it the Id
+		// is "systray_<pid>", which changes every launch, and KDE Plasma
+		// forgets the icon's "Always shown/hidden" choice. On macOS a title
+		// would be drawn next to the menu bar icon.
+		systray.SetTitle(brand.DisplayName)
+	}
 	systray.Run(func() {
 		t.mu.Lock()
 		t.ready = true
-		// Before the first SetIcon the state is unknown: show the neutral app
-		// icon rather than the zero State (Down).
-		k := iconKeyOther{state: icon.AppState}
+		// Before the first SetIcon the state is unknown: show the neutral
+		// pending icon, which claims neither "in sync" nor an error.
+		k := iconKeyOther{state: icon.PendingState}
 		if t.iconSet {
 			k = t.icon
 		}
@@ -92,6 +101,18 @@ func (t *fyneTray) Run(onReady func(), _ func(), onMenu func(id string)) {
 			onReady() // systray already calls this on its own goroutine
 		}
 	}, nil)
+}
+
+// menuText prepares a label for the platform menu. Linux menus travel over
+// com.canonical.dbusmenu, which hides a single "_" and underlines the next
+// character as an access key, so a folder called "work_docs" would read
+// "workdocs"; "__" shows one literal underscore. The unescaped text stays in
+// node.shown for diffing.
+func menuText(s string) string {
+	if runtime.GOOS == "linux" {
+		return strings.ReplaceAll(s, "_", "__")
+	}
+	return s
 }
 
 // quantise rounds pct down to a 5% step in 0..100, so the ring only closes
@@ -204,13 +225,13 @@ func (t *fyneTray) build(parent *systray.MenuItem, items []MenuItem) []node {
 		var mi *systray.MenuItem
 		switch {
 		case parent == nil && box:
-			mi = systray.AddMenuItemCheckbox(it.Text, "", it.Checked)
+			mi = systray.AddMenuItemCheckbox(menuText(it.Text), "", it.Checked)
 		case parent == nil:
-			mi = systray.AddMenuItem(it.Text, "")
+			mi = systray.AddMenuItem(menuText(it.Text), "")
 		case box:
-			mi = parent.AddSubMenuItemCheckbox(it.Text, "", it.Checked)
+			mi = parent.AddSubMenuItemCheckbox(menuText(it.Text), "", it.Checked)
 		default:
-			mi = parent.AddSubMenuItem(it.Text, "")
+			mi = parent.AddSubMenuItem(menuText(it.Text), "")
 		}
 		if !it.Enabled {
 			mi.Disable()
@@ -250,7 +271,7 @@ func update(nodes []node, items []MenuItem) {
 			continue
 		}
 		if it.Text != n.shown.Text {
-			n.it.SetTitle(it.Text)
+			n.it.SetTitle(menuText(it.Text))
 		}
 		if it.Enabled != n.shown.Enabled {
 			if it.Enabled {

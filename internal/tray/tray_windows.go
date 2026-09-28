@@ -559,8 +559,8 @@ func (t *winTray) renderIcon(hwnd uintptr) {
 	key := iconKey{state: t.state, pct: t.pct, size: size}
 	if !t.iconSet {
 		// Before the first status poll the state is unknown: show the neutral
-		// app icon rather than the zero State (Down).
-		key.state = icon.AppState
+		// pending icon, which claims neither "in sync" nor an error.
+		key.state = icon.PendingState
 	}
 	t.mu.Unlock()
 	if key.state != model.StateSyncing {

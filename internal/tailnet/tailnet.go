@@ -76,14 +76,14 @@ type Status struct {
 // Running reports whether Tailscale is connected and logged in.
 func (s Status) Running() bool { return s.BackendState == BackendRunning }
 
-// FindByIP returns the node (self or a peer) that owns ip.
+// FindByIP returns the peer that owns ip. This computer (Self) is never
+// returned: a connection from one of its own addresses can come from any
+// local process or user account, so it identifies no other device. Use
+// SelfHasIP to recognise those addresses.
 func (s Status) FindByIP(ip netip.Addr) (Node, bool) {
 	ip = ip.Unmap().WithZone("")
 	if !ip.IsValid() {
 		return Node{}, false
-	}
-	if hasIP(s.Self, ip) {
-		return s.Self, true
 	}
 	for _, p := range s.Peers {
 		if hasIP(p, ip) {
@@ -91,6 +91,12 @@ func (s Status) FindByIP(ip netip.Addr) (Node, bool) {
 		}
 	}
 	return Node{}, false
+}
+
+// SelfHasIP reports whether ip is one of this computer's own tailnet addresses.
+func (s Status) SelfHasIP(ip netip.Addr) bool {
+	ip = ip.Unmap().WithZone("")
+	return ip.IsValid() && hasIP(s.Self, ip)
 }
 
 func hasIP(n Node, ip netip.Addr) bool {

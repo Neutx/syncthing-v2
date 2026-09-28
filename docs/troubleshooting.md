@@ -4,9 +4,11 @@ Start with **`stv2 doctor`**. It checks Tailscale, Syncthing, the tailnet, the f
 
 | OS | How to run it |
 |---|---|
-| Windows | `& "$env:LOCALAPPDATA\Programs\SyncThingV2\stv2.exe" doctor` |
+| Windows | `& "$env:LOCALAPPDATA\Programs\SyncThingV2\stv2.exe" doctor \| Out-Host` |
 | macOS | `"$HOME/Applications/SyncThing V2.app/Contents/MacOS/stv2" doctor` (or `/Applications/…`) |
 | Linux | `stv2 doctor` |
+
+On Windows, the `| Out-Host` makes PowerShell wait for the result. Without it, PowerShell does not wait for `stv2.exe`: the report appears after the next prompt and `$LASTEXITCODE` is not set. Use it for `firewall allow` and `pair --list` too.
 
 Add `--json` for machine-readable output. The exit code is 1 when there is a **high** finding, and 0 otherwise. Doctor only reads. It never changes Syncthing, Tailscale or the firewall.
 
@@ -82,7 +84,7 @@ SyncThing V2 needs Syncthing **v1.27.0** or newer.
 
 This Syncthing listens for sync connections on another port. SyncThing V2's pairing discovery only probes port 22000, so other computers see this one as "Install SyncThing V2 on this device (or it uses a non-default port)".
 
-**Fix:** pair from this computer, which can still reach the others, or pair by hand. Both are described in [pairing.md → Non-default ports](pairing.md#non-default-ports). To go back to the default, set **Settings → Connections → Sync Protocol Listen Addresses** to `default` in Syncthing's web UI, then restart Syncthing.
+**Fix:** pair by hand, as described in [pairing.md → Non-default ports](pairing.md#non-default-ports). Pairing from this computer does not work either, because the other computer checks a request by connecting back to port 22000. To go back to the default, set **Settings → Connections → Sync Protocol Listen Addresses** to `default` in Syncthing's web UI, then restart Syncthing.
 
 ## SEC001
 
@@ -105,7 +107,7 @@ Doctor probed one of your online devices at `<100.x address>:22000` and got no S
 3. Its firewall allows Syncthing (see [FW001](#fw001) for Windows, and [firewalls on macOS and Linux](#firewalls-on-macos-and-linux)).
 4. Tailscale's Shields Up is off there.
 
-Only one of two computers needs to accept connections for sync to work, so a single NET001 is often harmless once the pair is connected.
+Pairing through SyncThing V2 needs both computers to reach each other on port 22000. A request from a device with NET001 is never shown on this computer, because this computer checks each request by connecting back to that port. Once two computers are paired, sync works as long as one of them can reach the other, so a NET001 for a device that is already paired and connected is often harmless.
 
 ## FW001
 
@@ -113,13 +115,15 @@ Only one of two computers needs to accept connections for sync to work, so a sin
 
 The inbound rule **SyncThing V2 - Syncthing** does not exist, so Windows may block other devices that try to connect to Syncthing on this computer.
 
-**Fix:** run the command below and accept the UAC prompt:
+**Fix:** click **Allow through firewall** on the dashboard's Welcome screen, or run the command below, and accept the UAC prompt:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\SyncThingV2\stv2.exe" firewall allow
+& "$env:LOCALAPPDATA\Programs\SyncThingV2\stv2.exe" firewall allow | Out-Host
 ```
 
-It adds a rule for the Syncthing program only, on port 22000 (TCP and UDP), for traffic from `100.64.0.0/10` and the local subnet. Pairing usually works without the rule, because only one side needs to accept connections. Uninstalling SyncThing V2 does not remove the rule, because that needs administrator rights. Remove it in **Windows Defender Firewall with Advanced Security** if you no longer want it.
+It adds a rule for the Syncthing program only, on port 22000 (TCP and UDP), for traffic from `100.64.0.0/10` and the local subnet. Pairing needs the rule: the other computer checks a pairing request by connecting back to this one on port 22000, and without the rule it never shows the request. Uninstalling SyncThing V2 does not remove the rule, because that needs administrator rights. Remove it in **Windows Defender Firewall with Advanced Security** if you no longer want it.
+
+**Still blocked with the rule in place.** If you ever clicked **Cancel** on Windows' "Windows Defender Firewall has blocked some features of this app" prompt for `syncthing.exe`, or could not approve it as a standard user, Windows added **Block** rules that override this rule. FW001 then passes, but other devices still cannot connect, and `stv2 doctor` on them reports [NET001](#net001) for this computer. Open **Windows Defender Firewall with Advanced Security → Inbound Rules**, and delete or disable any rule named "syncthing" or "syncthing.exe" with **Action** = **Block**.
 
 ## UI001
 
@@ -147,7 +151,7 @@ A newer release is on GitHub. The message links to it.
 
 ## Windows SmartScreen: "Windows protected your PC"
 
-Release 1.0 is not code-signed. SmartScreen warns about new unsigned programs until they build up a reputation. Click **More info**, check that the app is `SyncThingV2-Setup-<version>-windows-x64.exe`, then click **Run anyway**. The PowerShell one-liner avoids the prompt: it verifies the checksum and then runs the program directly. If Microsoft Defender flags or deletes the file, please [open an issue](https://github.com/Neutx/syncthing-v2/issues) and include the version. Every release is scanned with VirusTotal before it is published, and any detection is submitted to Microsoft as a false positive.
+Release 1.0 is not code-signed. Your browser may already warn at download time that the file isn't commonly downloaded. In Edge, open the download's **…** menu → **Keep** → **Show more** → **Keep anyway**. In Chrome, click **Keep**. SmartScreen warns about new unsigned programs until they build up a reputation. Click **More info**, check that the app is `SyncThingV2-Setup-<version>-windows-x64.exe`, then click **Run anyway**. The PowerShell one-liner avoids the prompt: it verifies the checksum and then runs the program directly. If Microsoft Defender flags or deletes the file, please [open an issue](https://github.com/Neutx/syncthing-v2/issues) and include the version. Every release is scanned with VirusTotal before it is published, and any detection is submitted to Microsoft as a false positive.
 
 ## macOS Gatekeeper: "cannot be opened" or "Apple could not verify"
 
@@ -159,11 +163,20 @@ Release 1.0 is not notarized. On macOS 15 and later, close the warning, then ope
 - **macOS:** on a crowded menu bar, macOS hides items behind the notch or when there is no room. Close other menu bar apps or use a menu bar manager.
 - **Linux (GNOME):** see [UI002](#ui002). Run `stv2 doctor` to confirm.
 
-In every case, starting SyncThing V2 again while it is already running opens its dashboard.
+On Windows and Linux, starting SyncThing V2 again while it is already running opens its dashboard. On macOS, opening the app again from Finder, Launchpad, Spotlight or the Dock only brings the running copy forward and does not open the dashboard. Run one of these in Terminal instead:
+
+```sh
+open -n -a "SyncThing V2"
+"$HOME/Applications/SyncThing V2.app/Contents/MacOS/stv2"
+```
+
+Use `/Applications/SyncThing V2.app/Contents/MacOS/stv2` if you installed from the disk image. The new copy sees that SyncThing V2 is already running, asks it to open the dashboard and exits.
 
 ## Firewalls on macOS and Linux
 
 `stv2 firewall allow` exists only on Windows.
+
+Pairing through SyncThing V2 needs both computers to accept incoming connections on port 22000 (see [pairing.md](pairing.md)).
 
 - **macOS:** the application firewall is off by default. When it is on, allow `syncthing` when macOS asks. The prompt can return after Syncthing upgrades itself. Check it under **System Settings → Network → Firewall → Options**.
 - **Linux with ufw:** `sudo ufw allow in on tailscale0 to any port 22000`. With firewalld, add port 22000/tcp and 22000/udp to the zone of the `tailscale0` interface.

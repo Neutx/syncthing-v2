@@ -19,7 +19,7 @@ const diagKey = "SyntheticApiKey0123456789abcdefXY" // synthetic; gitleaks:allow
 func diagSnapshot() model.Snapshot {
 	return model.Snapshot{
 		State:    model.StateSyncing,
-		Detail:   "peer " + idB + " failed at C:\\Users\\example\\Sync and /home/example/Sync from 192.0.2.44",
+		Detail:   "peer " + idB + " failed at C:\\Users\\example\\Sync: denied; /home/example/Sync: gone; from 192.0.2.44",
 		PeerLine: "example-b (Tailscale)",
 		Peers: []model.Peer{
 			{ID: idA, Name: "private-laptop-name", Addr: "100.64.0.2:22000", Transport: TransportTailscale, Connected: true},
@@ -98,7 +98,7 @@ func TestDiagnosticsRedaction(t *testing.T) {
 		"03:04:05  blue  Received <file>",
 		"03:04:04  green Device connected",
 		"03:04:03  red   Could not open: <path>",
-		"Detail: peer BBBBBBB failed at <path> and <path> from <ip>",
+		"Detail: peer BBBBBBB failed at <path>: denied; <path>: gone; from <ip>",
 		"tailnet: peer at 100.100.1.2 and <ip>",
 		"loopback: listening on 127.0.0.1:18384 and [::1]:18384",
 		"device: full id AAAAAAA",
@@ -145,5 +145,83 @@ func TestDiagnosticsDownState(t *testing.T) {
 func TestShort(t *testing.T) {
 	if Short(idA) != "AAAAAAA" || Short("ABC") != "ABC" || Short("") != "" {
 		t.Error("Short")
+	}
+}
+
+// Pairing and sharing notes name devices, hosts and folders; diagnostics keep
+// only what happened.
+func TestDiagnosticsRedactsNamesInActivity(t *testing.T) {
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	s := model.Snapshot{Activity: []model.ActivityItem{
+		{At: at, Text: "Pairing requested: synthetic-desktop", Tint: TintBlue},
+		{At: at, Text: "Paired with synthetic-laptop", Tint: TintGreen},
+		{At: at, Text: "Shared Synthetic Photos", Tint: TintGreen},
+		{At: at, Text: "Accepted Synthetic Taxes", Tint: TintGreen},
+		{At: at, Text: "Declined Synthetic Music", Tint: TintGrey},
+		{At: at, Text: "Transport profile set to Tailscale only", Tint: TintBlue},
+	}}
+	out := Diagnostics(s, nil)
+	for _, name := range []string{"synthetic-desktop", "synthetic-laptop", "Synthetic Photos", "Synthetic Taxes", "Synthetic Music"} {
+		if strings.Contains(out, name) {
+			t.Errorf("diagnostics leak %q:\n%s", name, out)
+		}
+	}
+	for _, want := range []string{"Pairing requested: <name>", "Paired with <name>", "Shared <name>", "Accepted <name>", "Declined <name>", "Transport profile set to Tailscale only"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("diagnostics lack %q:\n%s", want, out)
+		}
+	}
+}
+
+// Paths with spaces are removed whole: quoted, unquoted up to the ": "
+// separator, and any leftover home directory or account name.
+func TestRedactTextPathsWithSpaces(t *testing.T) {
+	old := homeDir
+	t.Cleanup(func() { homeDir = old })
+	homeDir = func() (string, error) { return `C:\Users\Jane Q Doe`, nil }
+
+	cases := []struct{ in, want string }{
+		{`Could not open: ShellExecute "C:\Users\Jane Q Doe\Sync\Tax Returns": access denied`,
+			`Could not open: ShellExecute "<path>": access denied`},
+		{`Setup failed: mkdir C:\Users\Jane Doe\AppData\Local\Syncthing: Access is denied.`,
+			`Setup failed: mkdir <path>: Access is denied.`},
+		{`Could not open: /Users/jane/Sync/Medical Records 2026`, `Could not open: <path>`},
+		{`open "/home/jane/My Files/a.txt" failed`, `open "<path>" failed`},
+		{`share \\nas\Family Photos\2026: offline`, `share <path>: offline`},
+		{`GET /rest/db/status failed for /home/jane/Old Stuff`, `GET /rest/db/status failed for <path>`},
+		{`profile C:/Users/Jane Q Doe/x moved`, `profile <path>`},
+		{`hello Jane Q Doe`, `hello <user>`},
+		{`Web UI at http://127.0.0.1:18384/ is "ready"`, `Web UI at http://127.0.0.1:18384/ is "ready"`},
+	}
+	for _, tc := range cases {
+		if got := RedactText(tc.in); got != tc.want {
+			t.Errorf("RedactText(%q)\n got %q\nwant %q", tc.in, got, tc.want)
+		}
+	}
+
+	// The account name (last element of the home directory) is removed as
+	// a whole word wherever it survives, in any letter case.
+	homeDir = func() (string, error) { return "/home/janedoe", nil }
+	for in, want := range map[string]string{
+		"user JaneDoe logged in":      "user <user> logged in",
+		"janedoe:janedoe":             "<user>:<user>",
+		"janedoes and xjanedoe stay":  "janedoes and xjanedoe stay",
+		"note for janedoe, see below": "note for <user>, see below",
+	} {
+		if got := RedactText(in); got != want {
+			t.Errorf("RedactText(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// A Diagnostics report built from such text keeps none of it.
+	homeDir = func() (string, error) { return `C:\Users\Jane Q Doe`, nil }
+	s := model.Snapshot{
+		Detail:   `mkdir C:\Users\Jane Q Doe\AppData\Local\Syncthing: Access is denied.`,
+		Activity: []model.ActivityItem{{Text: `Could not open: ShellExecute "C:\Users\Jane Q Doe\Sync\Tax Returns": failed`, Tint: TintRed}},
+	}
+	out := Diagnostics(s, map[string]string{"home": `C:\Users\Jane Q Doe\Sync`})
+	for _, leak := range []string{"Doe", "Tax Returns", "Sync\\", "AppData"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("diagnostics leak %q:\n%s", leak, out)
+		}
 	}
 }

@@ -1,0 +1,17 @@
+# gitleaks configuration, picked up automatically from the repository root by
+# `gitleaks git .` (CI lint job and .githooks/pre-commit).
+#
+# The default rule set stays in force. The one allowlist below covers the
+# synthetic Syncthing API key used by the internal/app tests: the initial commit
+# carries it without an inline gitleaks:allow. It is keyed on path + value, not
+# on a commit SHA, so it still holds if history is rewritten before publishing.
+title = "SyncThing V2 gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic test API key in the internal/app tests"
+condition = "AND"
+paths = ['''^internal/app/app_test\.go$''']
+regexes = ['''^synthetic-api-key-0123456789$''']

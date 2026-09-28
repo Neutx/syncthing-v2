@@ -37,6 +37,11 @@ func runningSyncthing(ctx context.Context) []string {
 	return out
 }
 
+// trustedBin reports whether p is an existing regular file. Windows keeps the
+// plain existence test: runningSyncthing only reports processes this user may
+// open, which excludes other users' processes.
+func trustedBin(p string) bool { return isRegular(p) }
+
 func imagePath(pid uint32) string {
 	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
 	if err != nil {

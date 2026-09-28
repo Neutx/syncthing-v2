@@ -42,7 +42,8 @@ case "$goos" in
         ldextra="-H windowsgui"
         if [ -f packaging/windows/winres.json ]; then
             echo "Generating exe resources ($GO_WINRES)"
-            "$GO" run "$GO_WINRES" make \
+            # go-winres runs on this machine, so build it for the host; --arch picks the target.
+            GOOS="$hostos" GOARCH="$hostarch" CGO_ENABLED=0 "$GO" run "$GO_WINRES" make \
                 --in packaging/windows/winres.json \
                 --arch "$goarch" \
                 --out cmd/stv2/rsrc \

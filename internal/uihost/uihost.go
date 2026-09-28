@@ -374,14 +374,31 @@ func placeRect(monitor, work image.Rectangle, dpi uint32, sizeDIP image.Point) (
 
 	x := work.Max.X - inset - w // right-aligned unless the taskbar is on the left
 	y := work.Max.Y - inset - h // bottom-aligned unless the taskbar is at the top
-	switch {
-	case work.Max.Y < monitor.Max.Y: // bottom taskbar
-	case work.Min.Y > monitor.Min.Y: // top taskbar
+	switch trayCorner(monitor, work) {
+	case "tr":
 		y = work.Min.Y + inset
-	case work.Min.X > monitor.Min.X: // left taskbar
+	case "bl":
 		x = work.Min.X + inset
 	}
 	return image.Rect(x, y, x+w, y+h), scale
+}
+
+// trayCorner names the work-area corner placeRect puts the dashboard in,
+// the one nearest the tray: "br" (bottom or right taskbar, or none visible),
+// "tr" (top taskbar) or "bl" (left taskbar). The page scales its entrance
+// from that corner (spec §8.1 Motion).
+func trayCorner(monitor, work image.Rectangle) string {
+	if work.Empty() {
+		work = monitor
+	}
+	switch {
+	case work.Max.Y < monitor.Max.Y: // bottom taskbar
+	case work.Min.Y > monitor.Min.Y: // top taskbar
+		return "tr"
+	case work.Min.X > monitor.Min.X: // left taskbar
+		return "bl"
+	}
+	return "br"
 }
 
 // browserHost opens the dashboard in the default browser through launch files.

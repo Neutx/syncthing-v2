@@ -43,18 +43,18 @@ If Syncthing already starts at login, SyncThing V2 recognises it and leaves it a
 
 - a Windows Startup-folder shortcut to `syncthing.exe` (such as `Startup\Syncthing.lnk`)
 - another HKCU Run value that mentions Syncthing
-- a `~/Library/LaunchAgents/*syncthing*.plist` (for example from `brew services`)
-- an enabled `syncthing*.service` user unit
+- a LaunchAgent in `~/Library/LaunchAgents` that runs a program named `syncthing` (for example from `brew services`)
+- an enabled systemd user unit or XDG autostart entry that runs a program named `syncthing` (for example `homebrew.syncthing.service`)
 
 The **Start Syncthing …** toggle then reads "configured outside SyncThing V2" and cannot be changed from SyncThing V2. If there is no entry at all, you can turn the toggle on, and SyncThing V2 creates and owns an entry. It creates or removes only entries it owns.
 
-## The older "Syncthing Tray" app (Windows)
+## SyncThing V2's earlier prototype tray (Windows)
 
-SyncThing V2 replaces an earlier Windows prototype, the "Syncthing Tray" app (`SyncthingTray.exe`, started by `Syncthing Tray.lnk` in your Startup folder). When SyncThing V2 finds that shortcut, or the app running, it asks **once**, either in the installer or as a dashboard notice:
+SyncThing V2 replaces its own earlier C# prototype, a Windows tray app installed as `%LOCALAPPDATA%\Programs\Syncthing\tray\SyncthingTray.exe` and started by `Syncthing Tray.lnk` in your Startup folder. This is not the Syncthing Tray project by Martchus (`syncthingtray.exe`), which SyncThing V2 leaves alone. SyncThing V2 only acts on a `SyncthingTray.exe` running from exactly that prototype location, and on a `Syncthing Tray.lnk` that points to it. When it finds either, it asks **once**, either in the installer or as a dashboard notice:
 
 > An older Syncthing tray app is running. Replace it with SyncThing V2?
 
-- **Replace:** SyncThing V2 stops `SyncthingTray.exe` and renames `Syncthing Tray.lnk` in your Startup folder (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`) to **`Syncthing Tray.lnk.disabled`**. Nothing is deleted. Your Syncthing and its own startup shortcut (`Syncthing.lnk`, if you have one) are not touched.
+- **Replace:** SyncThing V2 stops the prototype's `SyncthingTray.exe` and renames `Syncthing Tray.lnk` in your Startup folder (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`) to **`Syncthing Tray.lnk.disabled`**. Nothing is deleted. Your Syncthing and its own startup shortcut (`Syncthing.lnk`, if you have one) are not touched.
 - **No:** nothing changes, and SyncThing V2 does not ask again. The two apps can run side by side. You will see two tray icons.
 
 ### Going back

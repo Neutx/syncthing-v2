@@ -190,7 +190,7 @@
         <section id="wel-fw-sec" class="section" hidden>
           <h2 class="section-label">FIREWALL</h2>
           <div class="card card-list">
-            <p class="set-help">Allow Syncthing through Windows Firewall for your tailnet and local network. Windows asks for administrator approval. Sync usually works without it, because only one side of a pair needs to accept connections.</p>
+            <p class="set-help">Allow Syncthing through Windows Firewall for your tailnet and local network. Windows asks for administrator approval. Pairing needs it: the other computer checks a pairing request by connecting back to this one on port 22000, and without this rule the request never appears there.</p>
             <div class="flow-actions pad"><button id="wel-fw" class="small-btn" type="button">Allow through firewall</button></div>
           </div>
         </section>
@@ -279,6 +279,17 @@
 
   <canvas id="fx-over" class="fx fx-over" aria-hidden="true"></canvas>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="path-entry" class="expired path-entry" role="dialog" aria-modal="true" aria-labelledby="path-entry-title" hidden>
+    <div class="card path-card">
+      <p id="path-entry-title" class="flow-title">Choose a folder</p>
+      <p class="set-help">No folder picker is installed, so type the folder's full path (for example /home/you/Sync/Documents). To browse instead, install zenity or kdialog.</p>
+      <input id="path-entry-input" class="path-input mono" type="text" spellcheck="false" autocomplete="off" aria-labelledby="path-entry-title">
+      <div class="flow-actions">
+        <button id="path-entry-ok" class="small-btn primary" type="button">Use this folder</button>
+        <button id="path-entry-cancel" class="small-btn" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
   <div id="expired" class="expired" role="alert" hidden>
     <p class="flow-title">Session ended</p>
     <p class="flow-text">Open the dashboard again from the SyncThing V2 tray icon.</p>

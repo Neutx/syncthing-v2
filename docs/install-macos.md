@@ -23,22 +23,30 @@ The script (`install.sh`, published with each release):
 3. moves **SyncThing V2.app** to `~/Applications`. An older copy there is asked to quit (`stv2 --quit`) and then replaced.
 4. runs `stv2 install --yes`, which turns on **Open at Login** and starts the app
 
-This is the recommended path because files that `curl` downloads are not quarantined, so Gatekeeper does not block the unsigned app. The script refuses to run as root. To install a specific release, run `curl -fsSL … | STV2_VERSION=1.0.0 sh`.
+This is the recommended path because files that `curl` downloads are not quarantined, so Gatekeeper does not block the unsigned app. The script refuses to run as root; `stv2` itself also refuses to install or run as root unless `STV2_ALLOW_ROOT=1` is set (the script's `--allow-root` sets it). To install a specific release, run `curl -fsSL https://github.com/Neutx/syncthing-v2/releases/latest/download/install.sh | STV2_VERSION=1.0.0 sh`.
 
 ## Option 2: the disk image
 
 1. Download `SyncThingV2-<version>-macos-universal.dmg` from the [latest release](https://github.com/Neutx/syncthing-v2/releases/latest). If you like, [verify it](../README.md#verifying-downloads).
-2. Open it and drag **SyncThing V2** to **Applications**. Do not run it from the disk image: it will not set itself to open at login from there, because the image goes away when ejected.
+2. Open it and drag **SyncThing V2** to **Applications**. Do not run it from the disk image: **Open at Login** is refused until the app is in Applications, because the image goes away when ejected.
 3. Open SyncThing V2 from Applications. Release 1.0 is not notarized, so macOS blocks the first launch:
    - **macOS 15 (Sequoia) and later:** close the warning, open **System Settings → Privacy & Security**, scroll to the message about "SyncThing V2" and click **Open Anyway**. Then confirm with your password or Touch ID. Right-click → Open no longer skips the check on these versions.
    - **macOS 12 to 14:** Control-click the app in Finder, choose **Open**, then click **Open** in the dialog.
 4. In the SyncThing V2 menu, turn on **Start SyncThing V2 at login**. You can also turn it on in **Settings**, or run `"/Applications/SyncThing V2.app/Contents/MacOS/stv2" install --yes` once in Terminal.
 
+## Option 3: the .tar.gz
+
+The archive `SyncThingV2-<version>-macos-universal.tar.gz` holds the same `SyncThing V2.app` as the disk image.
+
+1. Download it from the [latest release](https://github.com/Neutx/syncthing-v2/releases/latest) and extract it (double-click it in Finder, or run `tar -xzf SyncThingV2-<version>-macos-universal.tar.gz`).
+2. Move **SyncThing V2.app** to **Applications** (or `~/Applications`) before you open it. A downloaded app that is opened where it was extracted runs from a temporary copy that macOS makes (App Translocation), and **Open at Login** is refused there for the same reason as on the disk image.
+3. Open it and approve it as in step 3 of Option 2, then turn on **Start SyncThing V2 at login** as in step 4.
+
 ## What happens next
 
 On first launch, SyncThing V2 opens its dashboard in your browser and runs the first-time setup:
 
-- **Syncthing.** A running Syncthing, or one installed with Homebrew or as `Syncthing.app`, is found and used as it is. If there is none, SyncThing V2 downloads the pinned upstream release, checks its SHA-256, and sets it up with the tailnet-only transport profile. It starts Syncthing at login through a LaunchAgent.
+- **Syncthing.** A running Syncthing, or one installed with Homebrew, MacPorts, Nix or as `Syncthing.app`, is found and used as it is. Only a Syncthing that runs as you and whose program only you (or the system) can change is used. If there is none, SyncThing V2 downloads the pinned upstream release, checks its SHA-256, and sets it up with the tailnet-only transport profile. It starts Syncthing at login through a LaunchAgent.
 - **Tailscale.** If the Tailscale command-line tool cannot be found, the dashboard shows a notice. SyncThing V2 looks for it in the Mac App Store app (`/Applications/Tailscale.app`) and in Homebrew's locations.
 
 Then open **Pair devices**. [pairing.md](pairing.md) walks through it.
@@ -60,7 +68,7 @@ Syncthing's own configuration and database stay in `~/Library/Application Suppor
 
 ## Application firewall
 
-The macOS application firewall is off by default. If you turned it on, macOS asks whether `syncthing` may accept incoming connections. Click **Allow**. The question can come back after Syncthing upgrades itself, because the upgraded binary counts as a new program. Declining is not fatal: pairing and sync need only one of the two computers to accept incoming connections.
+The macOS application firewall is off by default. If you turned it on, macOS asks whether `syncthing` may accept incoming connections. Click **Allow**. The question can come back after Syncthing upgrades itself, because the upgraded binary counts as a new program. Allow it at least while you pair: pairing through SyncThing V2 needs both computers to accept incoming connections on port 22000 (see [pairing.md](pairing.md)). After pairing, sync keeps working as long as one of the two computers accepts them.
 
 ## Upgrading
 

@@ -36,8 +36,13 @@ body:
     id: version
     attributes:
       label: SyncThing V2 version
-      description: The first line of `stv2 version`.
-      placeholder: "stv2 1.0.0"
+      description: |
+        The first line printed by `stv2 version`. `stv2` is not on PATH on Windows or macOS, so run it by its full path:
+
+        - Windows (PowerShell): `& "$env:LOCALAPPDATA\Programs\SyncThingV2\stv2.exe" version | Out-Host`
+        - macOS: `"$HOME/Applications/SyncThing V2.app/Contents/MacOS/stv2" version` (or `/Applications/…` for a system-wide install)
+        - Linux: `stv2 version`
+      placeholder: "SyncThing V2 1.0.0"
     validations:
       required: true
 
@@ -79,8 +84,15 @@ body:
     attributes:
       label: Output of `stv2 doctor --json`
       description: |
-        Run `stv2 doctor --json` and paste the output. Before posting, truncate every device ID to its
-        first 7 characters and replace host names, user names, tailnet IPs and paths with placeholders.
+        Run doctor with `--json` and paste the output
+        ([troubleshooting guide](https://github.com/Neutx/syncthing-v2/blob/main/docs/troubleshooting.md#troubleshooting)):
+
+        - Windows (PowerShell): `& "$env:LOCALAPPDATA\Programs\SyncThingV2\stv2.exe" doctor --json | Out-Host`
+        - macOS: `"$HOME/Applications/SyncThing V2.app/Contents/MacOS/stv2" doctor --json` (or `/Applications/…` for a system-wide install)
+        - Linux: `stv2 doctor --json`
+
+        Before posting, truncate every device ID to its first 7 characters and replace host names,
+        user names, tailnet IPs and paths with placeholders.
       render: json
     validations:
       required: true
