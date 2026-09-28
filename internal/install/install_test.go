@@ -421,7 +421,9 @@ func checkRegistration(t *testing.T, r Roots, exe string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.EqualFold(link.Target, exe) {
+		// IShellLinkW stores the long form of an 8.3 path (a CI runner's
+		// TEMP is C:\Users\RUNNER~1\...), so compare files, not spellings.
+		if !strings.EqualFold(link.Target, exe) && !sameFile(link.Target, exe) {
 			t.Errorf("shortcut target = %q, want %q", link.Target, exe)
 		}
 	case "linux":
@@ -1017,4 +1019,11 @@ func TestCheckLoginPath(t *testing.T) {
 			t.Errorf("CheckLoginPath(%q) = %v, want ok %v", c.exe, err, c.ok)
 		}
 	}
+}
+
+// sameFile reports whether a and b name the same existing file.
+func sameFile(a, b string) bool {
+	fa, err1 := os.Stat(a)
+	fb, err2 := os.Stat(b)
+	return err1 == nil && err2 == nil && os.SameFile(fa, fb)
 }
