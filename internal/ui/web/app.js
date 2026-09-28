@@ -253,19 +253,30 @@
   function drawRim(e1) {
     const ctx = ctxFor(fxOver, W, H);
     const drift = reduced() ? 0 : (breathe.Sin01 - 0.5) * 2;
-    tracePath(ctx, RIM_PATH);
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = 'rgba(255,255,255,' + ((46 * e1) / 255).toFixed(3) + ')';
-    ctx.stroke();
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 0, W * 0.72, 120 + drift * 6);
-    ctx.clip();
+    // The arc is the rim stroked brighter, then masked by an ellipse around
+    // the upper-left corner (72 % of the width along the top, 120 px down the
+    // left side) that fades to nothing, so the arc has soft ends. A hard
+    // rectangular clip left it ending in abrupt steps that read as a
+    // rendering glitch.
     tracePath(ctx, RIM_PATH);
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = 'rgba(255,255,255,' + ((120 * e1) / 255).toFixed(3) + ')';
     ctx.stroke();
+    const rx = W * 0.72, ry = 120 + drift * 6;
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.scale(1, ry / rx);
+    const fade = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+    fade.addColorStop(0, 'rgba(255,255,255,1)');
+    fade.addColorStop(0.45, 'rgba(255,255,255,1)');
+    fade.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = fade;
+    ctx.fillRect(0, 0, W, (H * rx) / ry);
     ctx.restore();
+    tracePath(ctx, RIM_PATH);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,' + ((46 * e1) / 255).toFixed(3) + ')';
+    ctx.stroke();
   }
 
   // Header status glyph (D5): 36 px ring, per-state mark, specular glint.
