@@ -109,8 +109,6 @@ Build-time tools only, run with `go run <module>@<pinned version>`:
 
 Everything else is standard library: `net/http`, `net/netip`, `crypto/tls`, `crypto/sha256`, `encoding/xml`, `encoding/json`, `archive/zip`, `archive/tar`, `compress/gzip`, `os/exec`, `embed`, `image/png`.
 
-**Dependency anchor:** `internal/deps/deps_{windows,darwin,linux}.go` blank-imports every runtime module under the matching build tags. This means `go.mod` and `go.sum` are written once, in the foundation task, and stay tidy while the other packages are being built in parallel.
-
 ### 2.3 Process model
 
 ```
@@ -151,7 +149,6 @@ Everything else is standard library: `net/http`, `net/netip`, `crypto/tls`, `cry
 cmd/stv2/main.go
 internal/brand/        names, version, disclaimer, per-OS strings
 internal/model/        shared data types (Snapshot, State, Peer, Folder, ActivityItem, Candidate, Pending*)
-internal/deps/         dependency anchor (blank imports, build-tagged)
 internal/applog/       rolling log (1 MiB × 2) with redaction
 internal/prefs/        prefs.json (atomic write)
 internal/single/       single-instance + instance.json control file
