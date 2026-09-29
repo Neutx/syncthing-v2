@@ -1,0 +1,9 @@
+{
+  "ignoredFiles": [
+    "internal/**/testdata/**",
+    "assets/icons/**",
+    "assets/screenshots/**",
+    "assets/demo.gif",
+    "assets/social-preview.png"
+  ]
+}
