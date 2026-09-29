@@ -47,7 +47,7 @@ Tags must be semantic versions: `vX.Y.Z`, or `vX.Y.Z-suffix` for a pre-release, 
 
 **Optional signing.** These steps are present in the workflow but skipped unless their secrets exist:
 
-- **Authenticode through the SignPath Foundation:** the `SIGNPATH_API_TOKEN` secret, plus the variables `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG` and `SIGNPATH_SIGNING_POLICY_SLUG`.
+- **Authenticode through the SignPath Foundation:** the `SIGNPATH_API_TOKEN` secret, plus the variables `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG` and `SIGNPATH_SIGNING_POLICY_SLUG`. See [Windows code signing](#windows-code-signing-signpath) and the [code signing policy](../CODE_SIGNING.md).
 - **Apple Developer ID signing and notarization:** `APPLE_DEVELOPER_ID_P12` (base64), `APPLE_ID`, `APPLE_TEAM_ID` and `APPLE_APP_PASSWORD`, plus `APPLE_DEVELOPER_ID_P12_PASSWORD` if the `.p12` has a password.
 
 Release 1.0 ships unsigned.
@@ -92,3 +92,52 @@ It refuses to write anything if the signature does not verify. Commit the two ch
 Then run the e2e test, which downloads the newly pinned release.
 
 If Syncthing ever rotates its release key, replace `build/syncthing-release-key.asc` only after checking the new key through at least two independent channels. The script's header lists the checks that were done for the current key. `brand.MinSyncthing` (the oldest supported Syncthing, doctor code ST004) is changed by hand, and only for a real API need.
+
+## Windows code signing (SignPath)
+
+The Windows installer can be Authenticode-signed for free by the [SignPath Foundation](https://signpath.org). The rules are in the [code signing policy](../CODE_SIGNING.md). Until the secrets below exist, the `build-windows` job skips the signing steps and prints a notice, and the exe is released unsigned.
+
+### Before applying
+
+- Publish a release first. SignPath signs only projects that are already released in the form that will be signed.
+- Link the [code signing policy](../CODE_SIGNING.md) from the README and from the release notes, using the words "Code signing policy".
+- Turn on multi-factor authentication for every team member's GitHub account.
+
+### After approval
+
+1. **Account.** Accept the SignPath invitation and turn on multi-factor authentication.
+2. **Trusted build system.** In the organization, add the predefined **GitHub.com** trusted build system and link it to the project. Then install the SignPath GitHub App on `Neutx/syncthing-v2`.
+3. **Artifact configuration.** Make this the project's default artifact configuration. `actions/upload-artifact` zips the exe, so the root element is `<zip-file>`. `product-name` enforces the metadata that go-winres writes from `packaging/windows/winres.json`.
+
+   ```xml
+   <?xml version="1.0" encoding="utf-8"?>
+   <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+     <zip-file>
+       <pe-file path="SyncThingV2-Setup-*-windows-x64.exe" product-name="SyncThing V2">
+         <authenticode-sign />
+       </pe-file>
+     </zip-file>
+   </artifact-configuration>
+   ```
+
+4. **Signing policy.** Use the release-signing policy with manual approval, and make Neutx the approver. Where SignPath offers it, require GitHub-hosted runners (every job in `release.yml` uses them).
+5. **API token.** Create a CI user, give it the submitter role on that signing policy, and generate its API token.
+6. **Secrets and variables.** Store them in the repository. The names must match `release.yml`. Enter the token at the prompt, never on the command line.
+
+   ```sh
+   gh secret set SIGNPATH_API_TOKEN --repo Neutx/syncthing-v2
+   gh variable set SIGNPATH_ORGANIZATION_ID --repo Neutx/syncthing-v2 --body "<organization id>"
+   gh variable set SIGNPATH_PROJECT_SLUG --repo Neutx/syncthing-v2 --body "<project slug>"
+   gh variable set SIGNPATH_SIGNING_POLICY_SLUG --repo Neutx/syncthing-v2 --body "release-signing"
+   ```
+
+   The token is a secret. The other three values are not secret, so they are repository variables.
+7. **Update the policy page.** Remove the status note from `CODE_SIGNING.md` and the "Release 1.0 ships unsigned" line above, then mention signing in the next `CHANGELOG.md` section.
+
+### During a signed release
+
+1. `build-windows` uploads the unsigned exe and submits it to SignPath.
+2. Approve the request in SignPath within 20 minutes (`wait-for-completion-timeout-in-seconds: 1200`). If you do not, the job fails.
+3. The next step checks that `Get-AuthenticodeSignature` reports `Valid`, then replaces the unsigned exe. `SHA256SUMS.txt` and the attestations cover the signed file.
+
+If the signing policy disallows re-runs, re-running a failed run will not be signed. In that case, release a new patch version.

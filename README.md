@@ -98,7 +98,7 @@ GitHub Actions builds every asset and signs it with a [build provenance attestat
 gh attestation verify SyncThingV2-Setup-1.0.0-windows-x64.exe --repo Neutx/syncthing-v2
 ```
 
-Release 1.0 binaries are not code-signed. Windows SmartScreen and macOS Gatekeeper ask for confirmation, as described in the install guides.
+Release 1.0 binaries are not code-signed. Windows SmartScreen and macOS Gatekeeper ask for confirmation, as described in the install guides. The [Code signing policy](CODE_SIGNING.md) covers how signed Windows releases are built and approved.
 
 ## Documentation
 
