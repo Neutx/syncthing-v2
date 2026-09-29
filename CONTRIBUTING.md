@@ -4,6 +4,7 @@ Thanks for helping. Bug reports, platform reports (especially from macOS and Lin
 
 - **Bugs and platform reports:** open an [issue](https://github.com/Neutx/syncthing-v2/issues/new/choose) and fill in the template. Include the output of `stv2 version` and `stv2 doctor`, plus the redacted text from **Settings → Copy diagnostics**.
 - **Security problems:** do not open an issue. Follow [SECURITY.md](SECURITY.md).
+- **Conduct:** everyone taking part in this project follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 - **Larger changes:** open an issue first, so we can agree on the approach before you spend time on it.
 
 ## Setting up
