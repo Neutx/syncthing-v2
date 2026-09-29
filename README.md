@@ -1,5 +1,13 @@
 # SyncThing V2
 
+[![CI](https://github.com/Neutx/syncthing-v2/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Neutx/syncthing-v2/actions/workflows/ci.yml?query=branch%3Amain)
+[![Latest release](https://img.shields.io/github/v/release/Neutx/syncthing-v2?sort=semver)](https://github.com/Neutx/syncthing-v2/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/Neutx/syncthing-v2)](LICENSE)
+[![Platforms: Windows | macOS | Linux](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue)](#quick-start)
+[![Go version](https://img.shields.io/github/go-mod/go-version/Neutx/syncthing-v2)](go.mod)
+
+![SyncThing V2 pairing demo](assets/demo.gif)
+
 A tray app that keeps [Syncthing](https://syncthing.net/) running and pairs your computers over [Tailscale](https://tailscale.com/). You never copy a device ID or type an IP address.
 
 Install it on two computers that are signed in to the same Tailscale account, click **Pair** on one and **Accept** on the other, and pick a folder to share. SyncThing V2 then keeps an eye on the sync from the system tray. It shows a live status icon, notifications and a "Liquid Glass" dashboard.
