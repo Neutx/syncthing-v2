@@ -34,7 +34,7 @@ jobs:
 
   verify:
     needs: ci
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -179,7 +179,7 @@ jobs:
 
   build-linux:
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       VERSION: ${{ needs.verify.outputs.version }}
@@ -352,7 +352,7 @@ jobs:
         include:
           - os: windows-latest
             platform: windows
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             platform: linux
           - os: macos-15
             platform: macos
@@ -562,7 +562,7 @@ jobs:
 
   publish:
     needs: [verify, build-windows, build-linux, build-macos, installer-test]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: write
