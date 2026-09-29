@@ -160,6 +160,9 @@ jobs:
           signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
           github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
           wait-for-completion: true
+          # Every request waits for a manual approval in SignPath; the default
+          # 600 s is too short for that. 20 minutes fits the 30-minute job.
+          wait-for-completion-timeout-in-seconds: 1200
           output-artifact-directory: signed
       - name: Use the signed exe
         if: steps.signing.outputs.enabled == 'true'
