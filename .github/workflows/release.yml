@@ -91,7 +91,7 @@ jobs:
             fi
           done
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: meta
           path: meta/
@@ -145,7 +145,7 @@ jobs:
       - name: Upload the unsigned exe for SignPath
         id: unsigned
         if: steps.signing.outputs.enabled == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-windows
           path: dist/SyncThingV2-Setup-${{ env.VERSION }}-windows-x64.exe
@@ -174,7 +174,7 @@ jobs:
           if ($sig.Status -ne 'Valid') { throw "SignPath returned $name with signature status $($sig.Status)." }
           Copy-Item -LiteralPath $signed -Destination (Join-Path 'dist' $name) -Force
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows
           path: dist/SyncThingV2-Setup-*.exe
@@ -229,7 +229,7 @@ jobs:
             [ -f "$f" ] || { echo "::error::$f was not built"; exit 1; }
           done
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-linux
           path: |
@@ -339,7 +339,7 @@ jobs:
         if: always() && steps.apple.outputs.enabled == 'true'
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-macos
           path: |
